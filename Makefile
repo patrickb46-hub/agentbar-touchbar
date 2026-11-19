@@ -9,9 +9,9 @@ build:
 	swift build -c release $(SWIFT_FLAGS)
 
 bundle: build
-	rm -rf $(BUNDLE)
 	mkdir -p $(BUNDLE)/Contents/MacOS $(BUNDLE)/Contents/Resources
 	cp .build/release/agentbar $(BUNDLE)/Contents/MacOS/agentbar
+	chmod 755 $(BUNDLE)/Contents/MacOS/agentbar 2>/dev/null || true
 	cp Resources/Info.plist $(BUNDLE)/Contents/Info.plist
 	codesign --force --sign - $(BUNDLE)
 	@echo "bundled: $(BUNDLE)"
@@ -20,9 +20,11 @@ run: build
 	.build/release/agentbar
 
 install: bundle
-	mkdir -p $(PREFIX)
-	rm -rf $(PREFIX)/$(APP).app
-	cp -R $(BUNDLE) $(PREFIX)/$(APP).app
+	mkdir -p $(PREFIX)/$(APP).app/Contents/MacOS $(PREFIX)/$(APP).app/Contents/Resources
+	cp .build/release/agentbar $(PREFIX)/$(APP).app/Contents/MacOS/agentbar
+	chmod 755 $(BUNDLE)/Contents/MacOS/agentbar 2>/dev/null || true
+	cp Resources/Info.plist $(PREFIX)/$(APP).app/Contents/Info.plist
+	codesign --force --sign - $(PREFIX)/$(APP).app
 	@echo "已安装到 $(PREFIX)/$(APP).app，双击或在终端运行 open -a AgentBar 启动"
 
 uninstall:

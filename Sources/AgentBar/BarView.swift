@@ -6,6 +6,7 @@ final class BarView: NSView {
 
     private var hitLayout = BarLayout()
     private var didLogSize = false
+    var hasDrawn: Bool { didLogSize }
     private var calibrating = false
 
     func beginCalibration() {

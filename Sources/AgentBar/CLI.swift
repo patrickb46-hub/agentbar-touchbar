@@ -319,3 +319,16 @@ extension ISODate {
         return f.string(from: date)
     }
 }
+
+extension CLI {
+    /// 调试：看某个会话在审计日志里的最后一条事件，以及是否被判为「等确认」
+    static func audit(_ args: [String]) {
+        guard let session = args.first else {
+            print("用法：agentbar audit <sessionId>")
+            return
+        }
+        AuditLog.invalidate()
+        let w = AuditLog.waitingApproval(sessionId: session)
+        print("isWaiting=\(w.isWaiting)  reason=\(w.reason ?? "-")  since=\(w.since.map { String($0) } ?? "-")")
+    }
+}

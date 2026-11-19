@@ -7,11 +7,12 @@ import Foundation
 ///   type = message | reasoning | function_call | function_call_result | credit-usage
 ///   timestamp（毫秒）、sessionId、cwd、role（仅 message）
 ///
-/// 状态推导（已用真实数据验证）：
-///   message(role=user)     → 新回合开始
-///   reasoning              → 思考中
-///   function_call 无 result → 正在跑该工具
-///   message(role=assistant)→ 回合结束
+/// 状态推导（全部事件驱动，不靠静默时长猜）：
+///   message(role=user)       → 回合打开
+///   reasoning / function_call_result → 思考中
+///   function_call 无 result  → 正在跑该工具
+///   message(role=assistant)  → 回合关闭 → 完成
+///   「等你确认」不看时长，看 ~/.workbuddy/audit-log 里的 ask-matched / needs-approval
 struct WorkBuddyAdapter {
     let provider: String
     let root: URL
@@ -65,15 +66,9 @@ struct WorkBuddyAdapter {
         var lastUserMs: Double?
         var lastAssistantMs: Double?
         var lastEntryMs: Double = 0
-        var lastKind = ""
-        var pending: [String: (tool: String, ts: Double, args: String)] = [:]
+        var turnOpen = false
+        var pending: [String: (tool: String, ts: Double)] = [:]
     }
-
-    /// 一眼就知道要跑很久的命令，别把它误判成「等你确认」
-    private static let longRunningMarkers = [
-        "build", "install", "npm ", "pip ", "brew ", "cargo ", "make ", "swift ",
-        "test", "ffmpeg", "yt-dlp", "git clone", "curl ", "wget ", "download", "rsync"
-    ]
 
     private func parse(file: URL, now: Date) -> AgentSnapshot? {
         let objs = JSONLTail.objects(file, maxBytes: 2 * 1024 * 1024)
@@ -89,27 +84,22 @@ struct WorkBuddyAdapter {
             switch obj["type"] as? String {
             case "message":
                 switch obj["role"] as? String {
-                case "user": p.lastUserMs = ts; p.pending.removeAll(); p.lastKind = "user"
-                case "assistant": p.lastAssistantMs = ts; p.lastKind = "assistant"
-                default: break
+                case "user":
+                    p.lastUserMs = ts
+                    p.pending.removeAll()
+                    p.turnOpen = true
+                case "assistant":
+                    p.lastAssistantMs = ts
+                    p.turnOpen = false
+                default:
+                    break
                 }
-            case "reasoning":
-                p.lastKind = "reasoning"
             case "function_call":
                 let callId = (obj["callId"] as? String) ?? UUID().uuidString
                 let name = (obj["name"] as? String) ?? "tool"
-                var args = ""
-                if let s = obj["arguments"] as? String {
-                    args = s
-                } else if let d = obj["arguments"], JSONSerialization.isValidJSONObject(d),
-                          let data = try? JSONSerialization.data(withJSONObject: d) {
-                    args = String(data: data, encoding: .utf8) ?? ""
-                }
-                p.pending[callId] = (name, ts, args)
-                p.lastKind = "function_call"
+                p.pending[callId] = (name, ts)
             case "function_call_result":
                 if let callId = obj["callId"] as? String { p.pending.removeValue(forKey: callId) }
-                p.lastKind = "function_call_result"
             case "session-meta":
                 if p.cwd == nil, let meta = obj["meta"] as? [String: Any] {
                     p.cwd = meta["cwd"] as? String
@@ -121,34 +111,31 @@ struct WorkBuddyAdapter {
 
         guard p.lastEntryMs > 0 else { return nil }
         let nowMsD = now.timeIntervalSince1970 * 1000
-        let quietMs = nowMsD - p.lastEntryMs
-        if quietMs > 3 * 3600 * 1000 { return nil }
+        if nowMsD - p.lastEntryMs > 3 * 3600 * 1000 { return nil }
 
         // 长会话的 user 消息可能落在尾部窗口之外，单独回扫一次
         if p.lastUserMs == nil {
             p.lastUserMs = JSONLTail.lastUserTimestamp(file)
         }
 
-        // 当前挂起的工具调用（取最近一次）
+        let sessionId = p.sessionId.isEmpty
+            ? file.deletingPathExtension().lastPathComponent
+            : p.sessionId
+
+        // 到底有没有在等你，以应用自己的审计日志为准
+        let audit = AuditLog.waitingApproval(sessionId: sessionId)
         let pendingTool = p.pending.max { $0.value.ts < $1.value.ts }
 
         var phase: Phase
         var tool: String?
-        var note: String?
-
-        if let pending = pendingTool {
+        if audit.isWaiting {
+            phase = .waitingApproval
+            tool = pendingTool?.value.tool
+        } else if let pending = pendingTool {
+            phase = .tool
             tool = pending.value.tool
-            let argsLower = pending.value.args.lowercased()
-            let looksLong = Self.longRunningMarkers.contains { argsLower.contains($0) }
-            let threshold: Double = looksLong ? 120_000 : 4_000
-            if quietMs > threshold {
-                phase = .waitingApproval
-                note = looksLong ? "疑似" : nil
-            } else {
-                phase = .tool
-            }
-        } else if p.lastKind == "reasoning" || p.lastKind == "user" {
-            phase = quietMs < 120_000 ? .thinking : .idle
+        } else if p.turnOpen {
+            phase = .thinking
         } else if let assistant = p.lastAssistantMs, (nowMsD - assistant) < 90_000 {
             phase = .done
         } else {
@@ -157,11 +144,10 @@ struct WorkBuddyAdapter {
 
         if phase == .idle { return nil }
 
-        let sessionId = p.sessionId.isEmpty
-            ? file.deletingPathExtension().lastPathComponent
-            : p.sessionId
-        let project = (p.cwd.map { ($0 as NSString).lastPathComponent }) ?? file.deletingLastPathComponent().lastPathComponent
-        let jump = "workbuddy://chat/" + (sessionId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionId)
+        let project = (p.cwd.map { ($0 as NSString).lastPathComponent })
+            ?? file.deletingLastPathComponent().lastPathComponent
+        let jump = "workbuddy://chat/"
+            + (sessionId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionId)
 
         return AgentSnapshot(
             provider: provider,
@@ -170,7 +156,7 @@ struct WorkBuddyAdapter {
             cwd: p.cwd,
             phase: phase,
             tool: tool,
-            note: note,
+            note: audit.isWaiting ? audit.reason : nil,
             turnStartedAt: p.lastUserMs.map { Int64($0) },
             updatedAt: Int64(p.lastEntryMs),
             jumpUrl: jump
@@ -206,7 +192,8 @@ struct WorkBuddyAdapter {
                             credits += (pd["credit"] as? NSNumber)?.doubleValue ?? 0
                             tokens += TokenHarvest.harvest(pd)
                         }
-                    default: break
+                    default:
+                        break
                     }
                 }
             }

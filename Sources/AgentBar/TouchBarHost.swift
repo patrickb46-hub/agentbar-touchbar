@@ -20,7 +20,12 @@ final class TouchBarHost: NSObject, NSTouchBarDelegate {
     private var reportedMissing = false
     private var didLogAttach = false
 
+    private var started = false
+    private var cachedItem: NSCustomTouchBarItem?
+
     func start() {
+        guard !started else { return }
+        started = true
         loadPrivateFrameworks()
         let bar = NSTouchBar()
         bar.delegate = self
@@ -29,6 +34,34 @@ final class TouchBarHost: NSObject, NSTouchBarDelegate {
 
         present()
         observeSystemEvents()
+
+        // 自检：present 返回成功不代表真的画上去了，3 秒后验证一次
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self else { return }
+            if self.view.hasDrawn {
+                Log.write("自检通过：视图已绘制")
+            } else {
+                Log.write("自检失败：present 成功但视图未绘制，重试")
+                _ = self.present()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    Log.write(self.view.hasDrawn ? "重试成功" : "重试仍失败，仅菜单栏可用")
+                }
+            }
+        }
+
+        // 自检：present 返回成功不代表真的画上去了，3 秒后验证一次
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self else { return }
+            if self.view.hasDrawn {
+                Log.write("自检通过：视图已绘制")
+            } else {
+                Log.write("自检失败：present 成功但视图未绘制，重试")
+                _ = self.present()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    Log.write(self.view.hasDrawn ? "重试成功" : "重试仍失败，仅菜单栏可用")
+                }
+            }
+        }
 
         // 系统在某些转场里会收回 modal bar，定时幂等重挂
         Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { [weak self] _ in
@@ -67,10 +100,13 @@ final class TouchBarHost: NSObject, NSTouchBarDelegate {
             return false
         }
 
-        typealias Fn = @convention(c) (AnyClass, Selector, NSTouchBar, Int, NSString?) -> Void
+        // 注意：release 优化下用 AnyClass 传第一个参数会被错误地装箱，
+        // 必须退化成裸指针（IMP 的第一个参数就是 self/metaclass 指针）。
+        typealias Fn = @convention(c) (UnsafeMutableRawPointer, Selector, NSTouchBar, Int, NSString?) -> Void
         let imp = method_getImplementation(method)
         let fn = unsafeBitCast(imp, to: Fn.self)
-        fn(cls, sel, bar, 0, nil)
+        let receiver = unsafeBitCast(cls, to: UnsafeMutableRawPointer.self)
+        fn(receiver, sel, bar, 0, nil)
 
         isAttached = true
         lastAttach = Date()
@@ -85,8 +121,9 @@ final class TouchBarHost: NSObject, NSTouchBarDelegate {
         guard let bar = touchBar, let cls = NSClassFromString("NSTouchBar") else { return }
         let sel = NSSelectorFromString("dismissSystemModalTouchBar:")
         guard let method = class_getClassMethod(cls, sel) else { return }
-        typealias Fn = @convention(c) (AnyClass, Selector, NSTouchBar) -> Void
-        unsafeBitCast(method_getImplementation(method), to: Fn.self)(cls, sel, bar)
+        typealias Fn = @convention(c) (UnsafeMutableRawPointer, Selector, NSTouchBar) -> Void
+        let fn = unsafeBitCast(method_getImplementation(method), to: Fn.self)
+        fn(unsafeBitCast(cls, to: UnsafeMutableRawPointer.self), sel, bar)
         isAttached = false
     }
 
@@ -95,6 +132,10 @@ final class TouchBarHost: NSObject, NSTouchBarDelegate {
     func touchBar(_ touchBar: NSTouchBar,
                   makeItemForIdentifier identifier: NSTouchBarItem.Identifier) -> NSTouchBarItem? {
         guard identifier == mainId else { return nil }
+        // 系统可能多次来要 item；必须复用同一个实例，
+        // 否则同一个 view 会在两个 item 之间被搬走，终态可能挂到不显示的那个。
+        if let cachedItem { return cachedItem }
+
         let item = NSCustomTouchBarItem(identifier: identifier)
         let width = AgentBarConfig.rulerMode ? AgentBarConfig.rulerWidth : AgentBarConfig.barWidth
         view.translatesAutoresizingMaskIntoConstraints = false
@@ -103,6 +144,8 @@ final class TouchBarHost: NSObject, NSTouchBarDelegate {
         view.widthConstraint = wc
         view.heightAnchor.constraint(equalToConstant: BarStyle.height).isActive = true
         item.view = view
+        cachedItem = item
+        Log.write("创建 Touch Bar item（宽度 \(Int(width))）")
         return item
     }
 

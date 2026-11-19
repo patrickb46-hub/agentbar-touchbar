@@ -11,6 +11,7 @@ if argv.count > 1 {
     case "dump":   CLI.dump(); exit(0)
     case "probe":  CLI.probe(Array(argv.dropFirst(2))); exit(0)
     case "clean":  CLI.clean(); exit(0)
+    case "audit":  CLI.audit(Array(argv.dropFirst(2))); exit(0)
     case "-h", "--help", "help":
         print(CLI.helpText); exit(0)
     default:

@@ -152,6 +152,36 @@ final class DSHAdapter {
         parse(file: file, now: Date(), force: true)
     }
 
+    /// 今天用掉多少 token、按官方价格折合多少钱（估算）
+    func todayUsage() -> (tokens: Int, cost: Double) {
+        guard FileManager.default.fileExists(atPath: cacheDir.path) else { return (0, 0) }
+        var tokens = 0
+        var cost = 0.0
+        let cal = Calendar.current
+        for file in FileUtil.files(in: cacheDir, matching: "json") {
+            guard cal.isDateInToday(FileUtil.mtime(file)) else { continue }
+            guard let data = try? Data(contentsOf: file),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let record = root["record"] as? [String: Any],
+                  let rows = record["rows"] as? [String: Any] else { continue }
+
+            let usage = (rows["tokenUsage"] as? [String: Any])?["val"] as? [String: Any]
+            let totals = usage?["totals"] as? [String: Any]
+            let cacheRead = (totals?["cacheReadTokens"] as? NSNumber)?.intValue ?? 0
+            let uncached = (totals?["uncachedInputTokens"] as? NSNumber)?.intValue ?? 0
+            let output = (totals?["outputTokens"] as? NSNumber)?.intValue ?? 0
+            guard cacheRead + uncached + output > 0 else { continue }
+
+            let model = ((rows["modelSelection"] as? [String: Any])?["val"] as? [String: Any])
+                .flatMap { ($0["lastUsed"] as? [String: Any])?["model"] as? String } ?? "deepseek-flash"
+
+            tokens += cacheRead + uncached + output
+            cost += Pricing.cost(cacheReadTokens: cacheRead, uncachedInputTokens: uncached,
+                                 outputTokens: output, model: model, at: FileUtil.mtime(file))
+        }
+        return (tokens, cost)
+    }
+
     func parse(file: URL, now: Date, force: Bool = false) -> AgentSnapshot? {
         guard let data = try? Data(contentsOf: file),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

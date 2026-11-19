@@ -125,6 +125,7 @@ struct TodayStats {
     var seconds: Double = 0
     var tokens: Int? = nil
     var credits: Double = 0
+    var costCNY: Double = 0
 
     var isEmpty: Bool { turns == 0 && seconds < 1 }
 
@@ -136,14 +137,17 @@ struct TodayStats {
         return "\(total)s"
     }
 
-    var usageText: String? {
-        if let t = tokens, t > 0 {
-            if t >= 1_000_000 { return String(format: "%.1fM tok", Double(t) / 1_000_000) }
-            if t >= 1000 { return String(format: "%.1fk tok", Double(t) / 1000) }
-            return "\(t) tok"
-        }
-        if credits > 0 { return String(format: "%.1f 分", credits) }
-        return nil
+    var costText: String? {
+        guard costCNY > 0 else { return nil }
+        if costCNY < 0.01 { return "<¥0.01" }
+        return String(format: "¥%.2f", costCNY)
+    }
+
+    var tokensText: String? {
+        guard let t = tokens, t > 0 else { return nil }
+        if t >= 1_000_000 { return String(format: "%.1fM tok", Double(t) / 1_000_000) }
+        if t >= 1000 { return String(format: "%.1fk tok", Double(t) / 1000) }
+        return "\(t) tok"
     }
 }
 

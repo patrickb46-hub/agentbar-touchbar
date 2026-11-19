@@ -132,7 +132,7 @@ enum BarRenderer {
         var x = BarStyle.padding
 
         // 右侧要预留多少：今日轮次 + 可能的按钮
-        let summary = todaySummary(today)
+        let summary = composeSummary(today, maxWidth: min(240, rect.width * 0.44))
         let summaryW = summary.map { measure($0, font: BarStyle.smallMono) } ?? 0
         let showsButton = primary.phase == .waitingApproval || primary.phase == .done
         let buttonLabel = primary.phase == .done ? "打开会话" : "跳回会话"
@@ -234,6 +234,14 @@ enum BarRenderer {
                 x += text(String(format: "%.1f 积分", today.credits), x: x,
                           font: BarStyle.bodyFont, color: BarStyle.secondaryText) + 12
             }
+            if let tokens = today.tokensText {
+                x += text("·", x: x, font: BarStyle.bodyFont, color: BarStyle.faintText) + 12
+                x += text(tokens, x: x, font: BarStyle.monoFont, color: BarStyle.secondaryText) + 12
+            }
+            if let cost = today.costText {
+                x += text("·", x: x, font: BarStyle.bodyFont, color: BarStyle.faintText) + 12
+                x += text(cost, x: x, font: BarStyle.monoFont, color: BarStyle.primaryText) + 12
+            }
         }
 
         guard rect.width > 420 else { return }
@@ -252,9 +260,24 @@ enum BarRenderer {
         }
     }
 
-    private static func todaySummary(_ today: TodayStats) -> String? {
+    /// 按优先级拼右栏摘要，放不下的部分自动丢掉
+    private static func composeSummary(_ today: TodayStats, maxWidth: CGFloat) -> String? {
         guard !today.isEmpty else { return nil }
-        return "今日 \(today.turns) 轮"
+        var parts: [String] = []
+        if today.turns > 0 { parts.append("今日 \(today.turns) 轮") }
+        if today.credits > 0 { parts.append(String(format: "%.1f 分", today.credits)) }
+        if let tokens = today.tokensText { parts.append(tokens) }
+        if let cost = today.costText { parts.append(cost) }
+        guard !parts.isEmpty else { return nil }
+
+        var chosen: [String] = []
+        for part in parts {
+            let candidate = (chosen + [part]).joined(separator: " · ")
+            if measure(candidate, font: BarStyle.smallMono) <= maxWidth {
+                chosen.append(part)
+            }
+        }
+        return chosen.isEmpty ? parts[0] : chosen.joined(separator: " · ")
     }
 
     // MARK: - 标尺（量真实宽度用）

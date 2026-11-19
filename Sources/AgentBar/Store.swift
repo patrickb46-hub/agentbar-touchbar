@@ -54,7 +54,10 @@ final class Store {
         todayStamp = now
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
-            let stats = self.workbuddy.todayStats()
+            var stats = self.workbuddy.todayStats()
+            let dsh = self.dsh.todayUsage()
+            if dsh.tokens > 0 { stats.tokens = dsh.tokens }
+            stats.costCNY = dsh.cost
             DispatchQueue.main.async {
                 self.cachedToday = stats
                 self.todayBusy = false

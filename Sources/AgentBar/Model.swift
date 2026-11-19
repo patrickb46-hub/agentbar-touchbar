@@ -69,13 +69,20 @@ struct AgentSnapshot {
 
     var elapsed: TimeInterval? {
         guard isLive, let start = turnStartedAt else { return nil }
-        return max(0, (Double(nowMs()) - Double(start)) / 1000.0)
+        return Self.sane(Double(nowMs()) - Double(start))
+    }
+
+    /// 系统时钟回拨 / 跳变时不要显示成 11 小时
+    private static func sane(_ deltaMs: Double) -> TimeInterval {
+        let seconds = deltaMs / 1000.0
+        if seconds < 0 { return 0 }
+        return min(seconds, 6 * 3600)
     }
 
     /// 已完成状态下这一轮实际花了多久
     var turnDuration: TimeInterval? {
         guard phase == .done, let start = turnStartedAt else { return nil }
-        return max(0, (Double(updatedAt) - Double(start)) / 1000.0)
+        return Self.sane(Double(updatedAt) - Double(start))
     }
 }
 

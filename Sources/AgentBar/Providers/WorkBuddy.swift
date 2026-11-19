@@ -138,10 +138,11 @@ final class WorkBuddyAdapter {
         } else if let pending = pendingTool {
             phase = .tool
             tool = pending.value.tool
-        } else if (nowMsD - p.lastEntryMs) < 20_000 {
-            // 一轮里会连续写很多条 assistant 消息，不能见到一条就判完成
+        } else if (nowMsD - p.lastEntryMs) < 2_000 {
+            // 实测：干活时 assistant 消息后 0.1 秒内必有下一条，
+            // 所以安静 2 秒就足以确认这一轮真的结束了。
             phase = .thinking
-        } else if p.lastAssistantMs != nil, (nowMsD - p.lastEntryMs) < 600_000 {
+        } else if p.lastAssistantMs != nil, (nowMsD - p.lastEntryMs) < 120_000 {
             phase = .done
         } else {
             phase = .idle

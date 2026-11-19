@@ -52,6 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "重新挂载 Touch Bar", action: #selector(reattach), keyEquivalent: "r"))
         menu.addItem(NSMenuItem(title: "校准右侧边界（点一下最右可用位置）", action: #selector(calibrate), keyEquivalent: "k"))
+        menu.addItem(NSMenuItem(title: "恢复被隐藏 / 归档的项目", action: #selector(restoreHidden), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "导出预览图…", action: #selector(exportPreview), keyEquivalent: "p"))
         menu.addItem(NSMenuItem(title: "打开状态目录", action: #selector(openStateDir), keyEquivalent: "o"))
         menu.addItem(.separator())
@@ -99,6 +100,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func calibrate() {
         host.view.beginCalibration()
+    }
+
+    @objc private func restoreHidden() {
+        AgentBarConfig.unhideAll()
+        AgentBarConfig.setFocus(nil)
+        Log.write("已恢复全部隐藏/归档的项目")
     }
 
     @objc private func exportPreview() {

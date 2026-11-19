@@ -4,23 +4,22 @@ final class BarView: NSView {
     var model = BarModel(primary: nil, others: [], today: TodayStats(), tick: 0)
     var widthConstraint: NSLayoutConstraint?
 
+    /// 长按某个卡片后进入的操作态
+    var actionTarget: AgentSnapshot?
+
     private var hitLayout = BarLayout()
     private var didLogSize = false
     var hasDrawn: Bool { didLogSize }
     private var calibrating = false
+    private var pressStart: (point: NSPoint, at: Date)?
 
-    func beginCalibration() {
-        calibrating = true
-        needsDisplay = true
-        Log.write("进入右侧边界校准")
-    }
+    private let longPressSeconds: TimeInterval = 0.55
 
     override var isFlipped: Bool { false }
     override var acceptsFirstResponder: Bool { true }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        // Touch Bar 走的是 touch 事件通道，不打开这个收不到点击
         allowedTouchTypes = [.indirect, .direct]
         wantsRestingTouches = false
     }
@@ -31,6 +30,12 @@ final class BarView: NSView {
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    func beginCalibration() {
+        calibrating = true
+        needsDisplay = true
+        Log.write("进入右侧边界校准")
+    }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -68,30 +73,54 @@ final class BarView: NSView {
             return
         }
 
-        // 右侧被控制条盖住的一段要扣掉，否则内容会被裁
         BarStyle.background.setFill()
         bounds.fill()
         let contentWidth = max(200, bounds.width - AgentBarConfig.reservedRight)
         let contentRect = NSRect(x: 0, y: 0, width: contentWidth, height: bounds.height)
-        hitLayout = BarRenderer.draw(model, in: contentRect)
+        hitLayout = BarRenderer.draw(model, in: contentRect, action: actionTarget)
     }
 
-    // MARK: - 点击（两种事件通道都接）
-
-    override func mouseDown(with event: NSEvent) {
-        handleTap(at: convert(event.locationInWindow, from: nil), source: "mouse")
-    }
+    // MARK: - 触摸：短按=点击，长按=操作菜单
 
     override func touchesBegan(with event: NSEvent) {
-        let touches = event.touches(matching: .began, in: self)
-        guard let first = touches.first else { return }
-        handleTap(at: first.location(in: self), source: "touch")
+        guard let touch = event.touches(matching: .began, in: self).first else { return }
+        let point = touch.location(in: self)
+
+        // 操作行里按下即生效
+        if actionTarget != nil {
+            performAction(at: point)
+            return
+        }
+        pressStart = (point, Date())
     }
 
-    private func handleTap(at point: NSPoint, source: String) {
-        Log.write("点击 \(source) at (\(Int(point.x)), \(Int(point.y)))  卡片 \(hitLayout.cards.count) 个")
+    override func touchesEnded(with event: NSEvent) {
+        defer { pressStart = nil }
+        guard let start = pressStart else { return }
+        let point = event.touches(matching: .ended, in: self).first?.location(in: self) ?? start.point
+        resolvePress(from: start, to: point, source: "touch")
+    }
 
-        // 校准模式：点的位置就是可用区域的右边界
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if actionTarget != nil {
+            performAction(at: point)
+            return
+        }
+        pressStart = (point, Date())
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        defer { pressStart = nil }
+        guard let start = pressStart else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        resolvePress(from: start, to: point, source: "mouse")
+    }
+
+    private func resolvePress(from start: (point: NSPoint, at: Date), to point: NSPoint, source: String) {
+        let duration = Date().timeIntervalSince(start.at)
+        let moved = hypot(point.x - start.point.x, point.y - start.point.y)
+
         if calibrating {
             let usable = max(200, min(bounds.width, point.x))
             AgentBarConfig.setReservedRight(bounds.width - usable)
@@ -101,6 +130,20 @@ final class BarView: NSView {
             return
         }
 
+        if duration >= longPressSeconds, moved < 30 {
+            if let card = hitLayout.cards.first(where: { $0.rect.contains(point) }) {
+                actionTarget = card.snapshot
+                needsDisplay = true
+                Log.write("长按：\(card.snapshot.project)")
+                return
+            }
+        }
+        handleTap(at: point, source: source)
+    }
+
+    private func handleTap(at point: NSPoint, source: String) {
+        Log.write("点击 \(source) at (\(Int(point.x)), \(Int(point.y)))  卡片 \(hitLayout.cards.count) 个")
+
         if let rect = hitLayout.approvalRect, rect.contains(point) {
             openPrimary()
             return
@@ -109,7 +152,34 @@ final class BarView: NSView {
             open(url: card.url, cwd: card.cwd)
             return
         }
-        Log.write("点击位置没有命中任何区域")
+    }
+
+    // MARK: - 操作行
+
+    private func performAction(at point: NSPoint) {
+        guard let target = actionTarget else { return }
+        guard let hit = hitLayout.actions.first(where: { $0.rect.contains(point) }) else {
+            actionTarget = nil
+            needsDisplay = true
+            return
+        }
+
+        let key = Store.key(target)
+        switch hit.kind {
+        case .focus:
+            AgentBarConfig.setFocus(key)
+            Log.write("聚焦：\(target.project)")
+        case .hide:
+            AgentBarConfig.hide(key, hours: 2)
+            Log.write("隐藏 2 小时：\(target.project)")
+        case .archive:
+            AgentBarConfig.archive(key)
+            Log.write("归档：\(target.project)")
+        case .cancel:
+            Log.write("取消操作：\(target.project)")
+        }
+        actionTarget = nil
+        needsDisplay = true
     }
 
     private func openPrimary() {

@@ -1,9 +1,14 @@
 import AppKit
 
+enum BarAction {
+    case focus, hide, archive, cancel
+}
+
 struct BarLayout {
     var approvalRect: NSRect?
     var primaryRect: NSRect?
-    var cards: [(rect: NSRect, url: String?, cwd: String?)] = []
+    var cards: [(rect: NSRect, url: String?, cwd: String?, snapshot: AgentSnapshot)] = []
+    var actions: [(rect: NSRect, kind: BarAction)] = []
 }
 
 enum BarStyle {
@@ -27,11 +32,14 @@ enum BarStyle {
 enum BarRenderer {
 
     @discardableResult
-    static func draw(_ model: BarModel, in rect: NSRect) -> BarLayout {
+    static func draw(_ model: BarModel, in rect: NSRect,
+                     action target: AgentSnapshot? = nil) -> BarLayout {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return BarLayout() }
 
         ctx.setFillColor(BarStyle.background.cgColor)
         ctx.fill(rect)
+
+        if let target { return drawActionRow(target, in: rect) }
 
         var agents: [AgentSnapshot] = []
         if let primary = model.primary { agents.append(primary) }
@@ -46,6 +54,48 @@ enum BarRenderer {
         }
         drawIdle(model, in: rect)
         return BarLayout()
+    }
+
+    // MARK: - 长按后的操作行
+
+    private static func drawActionRow(_ target: AgentSnapshot, in rect: NSRect) -> BarLayout {
+        var layout = BarLayout()
+        let accent = providerTint(target.provider)
+        var x = BarStyle.padding
+
+        let dotRect = NSRect(x: x + 3, y: rect.midY - 3, width: 6, height: 6)
+        target.phase.tint.setFill()
+        NSBezierPath(ovalIn: dotRect).fill()
+        x += 16
+        x += text(target.project, x: x, font: BarStyle.cardFont,
+                  color: NSColor(white: 0.95, alpha: 1), maxWidth: 180) + 18
+
+        let items: [(String, BarAction, NSColor)] = [
+            ("只看这个", .focus, accent),
+            ("隐藏 2 小时", .hide, BarStyle.secondaryText),
+            ("归档", .archive, NSColor(srgbRed: 1.0, green: 0.45, blue: 0.42, alpha: 1)),
+            ("取消", .cancel, BarStyle.faintText)
+        ]
+
+        for (label, kind, color) in items {
+            let w = measure(label, font: BarStyle.chipFont) + 22
+            guard x + w < rect.maxX - BarStyle.rightPadding else { break }
+            let r = NSRect(x: x, y: rect.midY - 10, width: w, height: 20)
+            let path = NSBezierPath(roundedRect: r, xRadius: 10, yRadius: 10)
+            color.withAlphaComponent(0.16).setFill()
+            path.fill()
+            color.withAlphaComponent(0.55).setStroke()
+            path.lineWidth = 1
+            path.stroke()
+            let tw = measure(label, font: BarStyle.chipFont)
+            _ = text(label, x: r.minX + (r.width - tw) / 2, font: BarStyle.chipFont,
+                     color: NSColor(white: 0.95, alpha: 1), maxWidth: r.width)
+            layout.actions.append((r, kind))
+            x += w + 8
+        }
+
+        layout.primaryRect = NSRect(x: 0, y: 0, width: rect.width, height: rect.height)
+        return layout
     }
 
     // MARK: - 多进程：每个 agent 一个彩色卡片，点哪个跳哪个
@@ -118,7 +168,7 @@ enum BarRenderer {
                          maxWidth: textMax)
             }
 
-            layout.cards.append((cardRect, agent.jumpUrl, agent.cwd))
+            layout.cards.append((cardRect, agent.jumpUrl, agent.cwd, agent))
         }
         return layout
     }
@@ -212,7 +262,7 @@ enum BarRenderer {
         }
 
         layout.primaryRect = NSRect(x: 0, y: 0, width: rect.width, height: rect.height)
-        layout.cards.append((layout.primaryRect!, primary.jumpUrl, primary.cwd))
+        layout.cards.append((layout.primaryRect!, primary.jumpUrl, primary.cwd, primary))
         return layout
     }
 

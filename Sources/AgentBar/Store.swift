@@ -15,6 +15,8 @@ struct BarModel {
 final class Store {
     static let shared = Store()
 
+    static func key(_ s: AgentSnapshot) -> String { "\(s.provider)|\(s.sessionId)" }
+
     private let workbuddy = WorkBuddyAdapter()
     private let copilot = CopilotAdapter()
     private let dsh = DSHAdapter()
@@ -33,9 +35,18 @@ final class Store {
         // 同一 provider+session 去重，取更新的那条
         var merged: [String: AgentSnapshot] = [:]
         for s in snaps {
-            let key = "\(s.provider)|\(s.sessionId)"
+            let key = Store.key(s)
             if let old = merged[key], old.updatedAt >= s.updatedAt { continue }
             merged[key] = s
+        }
+
+        // 长按菜单里隐藏 / 归档过的不再出现
+        merged = merged.filter { AgentBarConfig.isVisible($0.key) }
+
+        // 只看某一个
+        if let focus = AgentBarConfig.focusKey, let only = merged[focus] {
+            tick &+= 1
+            return BarModel(primary: only, others: [], today: cachedToday, tick: tick)
         }
 
         let sorted = merged.values.sorted { a, b in

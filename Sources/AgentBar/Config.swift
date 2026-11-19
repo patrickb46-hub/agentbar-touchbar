@@ -44,6 +44,54 @@ enum AgentBarConfig {
 
     static var rulerWidth: CGFloat { 1200 }
 
+    // MARK: - 单卡操作（长按菜单）
+
+    static var focusKey: String? { store["focus"] as? String }
+
+    static func setFocus(_ key: String?) {
+        if let key { store["focus"] = key } else { store.removeValue(forKey: "focus") }
+        persist()
+    }
+
+    /// key -> 到期时间（秒）。0 表示永久归档
+    static var hiddenUntil: [String: Double] {
+        (store["hidden"] as? [String: Double]) ?? [:]
+    }
+
+    static func hide(_ key: String, hours: Double) {
+        var dict = hiddenUntil
+        dict[key] = Date().timeIntervalSince1970 + hours * 3600
+        store["hidden"] = dict
+        if focusKey == key { setFocus(nil) }
+        persist()
+    }
+
+    static func archive(_ key: String) {
+        var dict = hiddenUntil
+        dict[key] = 0
+        store["hidden"] = dict
+        if focusKey == key { setFocus(nil) }
+        persist()
+    }
+
+    static func unhideAll() {
+        store.removeValue(forKey: "hidden")
+        persist()
+    }
+
+    static func isVisible(_ key: String) -> Bool {
+        guard let until = hiddenUntil[key] else { return true }
+        if until == 0 { return false }                       // 已归档
+        return Date().timeIntervalSince1970 > until          // 过期自动恢复
+    }
+
+    private static func persist() {
+        guard let data = try? JSONSerialization.data(withJSONObject: store, options: [.prettyPrinted, .sortedKeys])
+        else { return }
+        Paths.ensure()
+        try? data.write(to: configURL)
+    }
+
     /// 调试用：忽略「太旧就不显示」的过滤
     static var ignoreAge: Bool {
         ProcessInfo.processInfo.environment["AGENTBAR_IGNORE_AGE"] == "1"

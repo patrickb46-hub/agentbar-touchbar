@@ -217,7 +217,11 @@ enum CLI {
                              today: TodayStats(turns: 12, seconds: 6420, credits: 4.2), tick: 3)
         }
 
-        writePNG(model: model, to: out, width: width)
+        if kv["action"] != nil, let primary = model.primary {
+            writePNG(model: model, action: primary, to: out, width: width)
+        } else {
+            writePNG(model: model, to: out, width: width)
+        }
         print("已渲染：\(out)")
     }
 
@@ -233,7 +237,7 @@ enum CLI {
         try? data.write(to: url, options: .atomic)
     }
 
-    static func writePNG(model: BarModel, to path: String,
+    static func writePNG(model: BarModel, action: AgentSnapshot? = nil, to path: String,
                          width: CGFloat = 1000, height: CGFloat = BarStyle.height, scale: CGFloat = 2) {
         let pxW = Int(width * scale), pxH = Int(height * scale)
         guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: pxW, pixelsHigh: pxH,
@@ -244,7 +248,7 @@ enum CLI {
 
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-        BarRenderer.draw(model, in: NSRect(x: 0, y: 0, width: width, height: height))
+        BarRenderer.draw(model, in: NSRect(x: 0, y: 0, width: width, height: height), action: action)
         NSGraphicsContext.current?.flushGraphics()
         NSGraphicsContext.restoreGraphicsState()
 

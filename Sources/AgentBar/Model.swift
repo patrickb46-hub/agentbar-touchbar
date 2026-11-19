@@ -49,6 +49,11 @@ struct AgentSnapshot {
     var jumpUrl: String?
     /// 本轮真实耗时（来自日志自身的时间戳，跨时钟源也可靠）
     var durationMs: Int64? = nil
+    /// 本会话累计 token / 估算金额
+    var tokens: Int? = nil
+    var costCNY: Double? = nil
+    /// 该来源没有深链时，优先激活这个应用（而不是打开文件夹）
+    var jumpApp: String? = nil
 
     /// 排序权重：等你 > 干活 > 出错 > 刚完成
     var priority: Int {

@@ -9,6 +9,8 @@ struct BarLayout {
     var primaryRect: NSRect?
     var cards: [(rect: NSRect, url: String?, cwd: String?, snapshot: AgentSnapshot)] = []
     var actions: [(rect: NSRect, kind: BarAction)] = []
+    /// 「← 全部」退出单卡聚焦
+    var exitFocusRect: NSRect?
 }
 
 enum BarStyle {
@@ -182,15 +184,19 @@ enum BarRenderer {
         var x = BarStyle.padding
 
         // 右侧要预留多少：今日轮次 + 可能的按钮
-        let summary = composeSummary(today, maxWidth: min(240, rect.width * 0.44))
+        let summary = composeSummary(today, primary: primary, maxWidth: min(260, rect.width * 0.46))
         let summaryW = summary.map { measure($0, font: BarStyle.smallMono) } ?? 0
         let showsButton = primary.phase == .waitingApproval || primary.phase == .done
         let buttonLabel = primary.phase == .done ? "打开会话" : "跳回会话"
         let buttonW = showsButton ? measure(buttonLabel, font: BarStyle.chipFont) + 26 : 0
 
+        let exitW: CGFloat = AgentBarConfig.focusKey != nil
+            ? measure("← 全部", font: BarStyle.chipFont) + 22 : 0
+
         var reserve: CGFloat = 0
         if summaryW > 0 { reserve += summaryW + 16 }
         if buttonW > 0 { reserve += buttonW + 12 }
+        if exitW > 0 { reserve += exitW + 10 }
 
         // 状态灯
         let center = NSPoint(x: x + 5, y: rect.midY)
@@ -234,9 +240,10 @@ enum BarRenderer {
             x += text("+\(liveOthers.count)", x: x, font: BarStyle.chipFont, color: BarStyle.faintText) + 12
         }
 
-        // 今日轮次贴右
+        // 今日轮次贴右（有退出按钮时让位）
+        let summaryRightEdge = rightEdge - (exitW > 0 ? exitW + 10 : 0)
         if let summary {
-            let textX = rightEdge - summaryW
+            let textX = summaryRightEdge - summaryW
             if textX > x + 24 {
                 _ = text(summary, x: textX, font: BarStyle.smallMono, color: BarStyle.secondaryText)
             }
@@ -259,6 +266,21 @@ enum BarRenderer {
             _ = text(buttonLabel, x: r.minX + (r.width - tw) / 2, font: BarStyle.chipFont,
                      color: NSColor(white: 1, alpha: 0.95), maxWidth: r.width)
             layout.approvalRect = r
+        }
+
+        if exitW > 0 {
+            let r = NSRect(x: rightEdge - exitW, y: rect.midY - 10, width: exitW, height: 20)
+            let path = NSBezierPath(roundedRect: r, xRadius: 10, yRadius: 10)
+            NSColor(white: 1, alpha: 0.08).setFill()
+            path.fill()
+            NSColor(white: 1, alpha: 0.22).setStroke()
+            path.lineWidth = 1
+            path.stroke()
+            let label = "← 全部"
+            let tw = measure(label, font: BarStyle.chipFont)
+            _ = text(label, x: r.minX + (r.width - tw) / 2, font: BarStyle.chipFont,
+                     color: NSColor(white: 0.9, alpha: 1), maxWidth: r.width)
+            layout.exitFocusRect = r
         }
 
         layout.primaryRect = NSRect(x: 0, y: 0, width: rect.width, height: rect.height)
@@ -311,13 +333,18 @@ enum BarRenderer {
     }
 
     /// 按优先级拼右栏摘要，放不下的部分自动丢掉
-    private static func composeSummary(_ today: TodayStats, maxWidth: CGFloat) -> String? {
-        guard !today.isEmpty else { return nil }
+    private static func composeSummary(_ today: TodayStats, primary: AgentSnapshot?,
+                                      maxWidth: CGFloat) -> String? {
         var parts: [String] = []
         if today.turns > 0 { parts.append("今日 \(today.turns) 轮") }
-        if today.credits > 0 { parts.append(String(format: "%.1f 分", today.credits)) }
-        if let tokens = today.tokensText { parts.append(tokens) }
-        if let cost = today.costText { parts.append(cost) }
+        // 金额与 token 优先显示「本会话」，避免拿全天的总量冒充
+        if let tokens = primary?.tokens, tokens > 0 {
+            parts.append("本会话 " + compactTokens(tokens))
+        }
+        if let cost = primary?.costCNY, cost > 0 { parts.append(costText(cost)) }
+        if parts.count == 1, today.credits > 0 {
+            parts.append(String(format: "%.1f 分", today.credits))
+        }
         guard !parts.isEmpty else { return nil }
 
         var chosen: [String] = []
@@ -380,6 +407,16 @@ enum BarRenderer {
         let y = (BarStyle.height - lineHeight) / 2
         attr.draw(in: NSRect(x: x, y: y, width: maxWidth, height: lineHeight))
         return min(ceil(attr.size().width), maxWidth)
+    }
+
+    static func compactTokens(_ n: Int) -> String {
+        if n >= 1_000_000 { return String(format: "%.1fM tok", Double(n) / 1_000_000) }
+        if n >= 1000 { return String(format: "%.1fk tok", Double(n) / 1000) }
+        return "\(n) tok"
+    }
+
+    static func costText(_ cost: Double) -> String {
+        cost < 0.01 ? "<¥0.01" : String(format: "¥%.2f", cost)
     }
 
     static func measure(_ s: String, font: NSFont) -> CGFloat {

@@ -144,12 +144,18 @@ final class BarView: NSView {
     private func handleTap(at point: NSPoint, source: String) {
         Log.write("点击 \(source) at (\(Int(point.x)), \(Int(point.y)))  卡片 \(hitLayout.cards.count) 个")
 
+        if let rect = hitLayout.exitFocusRect, rect.contains(point) {
+            AgentBarConfig.setFocus(nil)
+            Log.write("退出单卡聚焦")
+            needsDisplay = true
+            return
+        }
         if let rect = hitLayout.approvalRect, rect.contains(point) {
             openPrimary()
             return
         }
         for card in hitLayout.cards where card.rect.contains(point) {
-            open(url: card.url, cwd: card.cwd)
+            open(url: card.url, cwd: card.cwd, app: card.snapshot.jumpApp)
             return
         }
     }
@@ -184,16 +190,27 @@ final class BarView: NSView {
 
     private func openPrimary() {
         guard let primary = model.primary else { return }
-        open(url: primary.jumpUrl, cwd: primary.cwd)
+        open(url: primary.jumpUrl, cwd: primary.cwd, app: primary.jumpApp)
     }
 
     /// 优先用深链跳回具体会话；没有可用的 scheme 就打开项目目录
-    private func open(url: String?, cwd: String?) {
+    private func open(url: String?, cwd: String?, app: String? = nil) {
         if let raw = url, let u = URL(string: raw), let scheme = u.scheme,
            NSWorkspace.shared.urlForApplication(toOpen: u) != nil {
             NSWorkspace.shared.open(u)
             Log.write("跳转 \(scheme):// \(u.path)")
             return
+        }
+        // 没有深链的 CLI 类工具：优先把它的宿主应用切到前台
+        if let app {
+            let bundle = URL(fileURLWithPath: "/Applications/\(app).app")
+            if FileManager.default.fileExists(atPath: bundle.path) {
+                NSWorkspace.shared.openApplication(at: bundle, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+                    if let error { Log.write("激活 \(app) 失败：\(error.localizedDescription)") }
+                    else { Log.write("激活 \(app)") }
+                }
+                return
+            }
         }
         if let cwd, FileManager.default.fileExists(atPath: cwd) {
             NSWorkspace.shared.open(URL(fileURLWithPath: cwd))

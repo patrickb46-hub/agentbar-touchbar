@@ -144,6 +144,9 @@ enum CLI {
             "updatedAt": s.updatedAt
         ]
         if let tool = s.tool { d["tool"] = tool }
+        if let tokens = s.tokens { d["tokens"] = tokens }
+        if let cost = s.costCNY { d["cost"] = (cost * 100).rounded() / 100 }
+        if let app = s.jumpApp { d["app"] = app }
         if let e = s.elapsed { d["elapsed"] = Int(e) }
         if let j = s.jumpUrl { d["jump"] = j }
         return d

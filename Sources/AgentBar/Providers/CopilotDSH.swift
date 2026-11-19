@@ -202,10 +202,10 @@ final class DSHAdapter {
         let turnOpen = (approval?["turnOpen"] as? Bool) ?? false
         let policy = approval?["policy"] as? String
 
+        // 注意：approvalState.turnOpen 表示「本轮是否允许弹审批」，不是「正在等你」，
+        // 用它判待确认会一直误报。dsh 目前只区分 执行 / 思考 / 空。
         var phase: Phase
-        if turnOpen, policy == "ask" {
-            phase = .waitingApproval
-        } else if openSeq != nil {
+        if openSeq != nil {
             phase = stepKind == "start" ? .tool : .thinking
         } else {
             phase = .idle
@@ -227,7 +227,27 @@ final class DSHAdapter {
         }
 
         let title = (rows["title"] as? [String: Any])?["val"] as? String
-        let project = (cwd.map { ($0 as NSString).lastPathComponent }) ?? title ?? "dsh"
+        // 优先用会话标题（一眼知道在干什么），没有才退回目录名
+        let project = title?.isEmpty == false ? title! :
+            ((cwd.map { ($0 as NSString).lastPathComponent }) ?? "dsh")
+
+        // 本会话累计用量与金额（只读 tokenUsage，不碰 permissions）
+        var sessionTokens: Int?
+        var sessionCost: Double?
+        if let usage = (rows["tokenUsage"] as? [String: Any])?["val"] as? [String: Any],
+           let totals = usage["totals"] as? [String: Any] {
+            let cacheRead = (totals["cacheReadTokens"] as? NSNumber)?.intValue ?? 0
+            let uncached = (totals["uncachedInputTokens"] as? NSNumber)?.intValue ?? 0
+            let output = (totals["outputTokens"] as? NSNumber)?.intValue ?? 0
+            if cacheRead + uncached + output > 0 {
+                sessionTokens = cacheRead + uncached + output
+                let model = ((rows["modelSelection"] as? [String: Any])?["val"] as? [String: Any])
+                    .flatMap { ($0["lastUsed"] as? [String: Any])?["model"] as? String } ?? "deepseek-flash"
+                sessionCost = Pricing.cost(cacheReadTokens: cacheRead, uncachedInputTokens: uncached,
+                                           outputTokens: output, model: model,
+                                           at: FileUtil.mtime(file))
+            }
+        }
 
         return AgentSnapshot(
             provider: "dsh",
@@ -239,7 +259,10 @@ final class DSHAdapter {
             note: nil,
             turnStartedAt: startedAt,
             updatedAt: Int64(FileUtil.mtime(file).timeIntervalSince1970 * 1000),
-            jumpUrl: nil
+            jumpUrl: nil,
+            tokens: sessionTokens,
+            costCNY: sessionCost,
+            jumpApp: "DeepSeek Harness"
         )
     }
 }

@@ -128,7 +128,19 @@ enum BarRenderer {
     private static func drawSingle(_ primary: AgentSnapshot, others: [AgentSnapshot],
                                    today: TodayStats, in rect: NSRect) -> BarLayout {
         var layout = BarLayout()
+        let rightEdge = rect.maxX - BarStyle.rightPadding
         var x = BarStyle.padding
+
+        // 右侧要预留多少：今日轮次 + 可能的按钮
+        let summary = todaySummary(today)
+        let summaryW = summary.map { measure($0, font: BarStyle.smallMono) } ?? 0
+        let showsButton = primary.phase == .waitingApproval || primary.phase == .done
+        let buttonLabel = primary.phase == .done ? "打开会话" : "跳回会话"
+        let buttonW = showsButton ? measure(buttonLabel, font: BarStyle.chipFont) + 26 : 0
+
+        var reserve: CGFloat = 0
+        if summaryW > 0 { reserve += summaryW + 16 }
+        if buttonW > 0 { reserve += buttonW + 12 }
 
         // 状态灯
         let center = NSPoint(x: x + 5, y: rect.midY)
@@ -150,56 +162,56 @@ enum BarRenderer {
             x += text(clockText(seconds), x: x, font: BarStyle.monoFont, color: BarStyle.secondaryText) + 16
         }
 
-        // 项目名
-        x += text("·", x: x, font: BarStyle.bodyFont, color: BarStyle.faintText) + 12
-        let maxProject: CGFloat = rect.width < 700 ? 90 : 170
-        x += text(primary.project, x: x, font: BarStyle.bodyFont, color: BarStyle.primaryText,
-                  maxWidth: maxProject) + 12
-
-        // 工具
-        if let tool = primary.tool, !tool.isEmpty, rect.width >= 700, primary.phase != .done {
-            x = chip(shortTool(tool), x: x) + 12
+        // 尾部元素先算宽度，剩下的才是项目名的
+        var chipLabel: String?
+        if let tool = primary.tool, !tool.isEmpty, primary.phase != .done {
+            chipLabel = shortTool(tool)
         }
-
-        // 并行中的其它 agent
+        let chipW = chipLabel.map { measure($0, font: BarStyle.chipFont) + 18 + 12 } ?? 0
         let liveOthers = others.filter { $0.isLive }
+        let othersW: CGFloat = liveOthers.isEmpty ? 0 : measure("+\(liveOthers.count)", font: BarStyle.chipFont) + 12
+
+        let sepW: CGFloat = 12
+        let projectMax = max(48, rightEdge - reserve - x - sepW - chipW - othersW - 8)
+        x += text("·", x: x, font: BarStyle.bodyFont, color: BarStyle.faintText) + sepW
+        x += text(primary.project, x: x, font: BarStyle.bodyFont, color: BarStyle.primaryText,
+                  maxWidth: projectMax) + 12
+
+        if let label = chipLabel {
+            x = chip(label, x: x) + 12
+        }
         if !liveOthers.isEmpty {
             x += text("+\(liveOthers.count)", x: x, font: BarStyle.chipFont, color: BarStyle.faintText) + 12
         }
 
-        // 右栏：今日累计（够宽才画）
-        var rightStart = rect.maxX - BarStyle.rightPadding
-        if rect.width >= 600, let summary = todaySummary(today) {
-            let w = measure(summary, font: BarStyle.smallMono)
-            let textX = rect.maxX - BarStyle.rightPadding - w
-            if textX > x + 40 {
+        // 今日轮次贴右
+        if let summary {
+            let textX = rightEdge - summaryW
+            if textX > x + 24 {
                 _ = text(summary, x: textX, font: BarStyle.smallMono, color: BarStyle.secondaryText)
-                rightStart = textX - 18
             }
         }
 
-        // 跳回按钮：等审批时是「跳回会话」，已完成时是「打开会话」
-        let showsButton = primary.phase == .waitingApproval || primary.phase == .done
+        // 跳回按钮：贴着左侧内容放，放不下再退到右侧
         if showsButton {
-            let label = primary.phase == .done ? "打开会话" : "跳回会话"
-            let w = measure(label, font: BarStyle.chipFont) + 26
             var originX = x + 6
-            if originX + w > rightStart { originX = max(BarStyle.padding, rightStart - w) }
-            let r = NSRect(x: originX, y: rect.midY - 10, width: w, height: 20)
+            if originX + buttonW > rightEdge - summaryW - 16 {
+                originX = max(BarStyle.padding, rightEdge - summaryW - 16 - buttonW)
+            }
+            let r = NSRect(x: originX, y: rect.midY - 10, width: buttonW, height: 20)
             let path = NSBezierPath(roundedRect: r, xRadius: 10, yRadius: 10)
             primary.phase.tint.withAlphaComponent(primary.phase == .done ? 0.18 : 0.24).setFill()
             path.fill()
             primary.phase.tint.withAlphaComponent(0.65).setStroke()
             path.lineWidth = 1
             path.stroke()
-            let tw = measure(label, font: BarStyle.chipFont)
-            _ = text(label, x: r.minX + (r.width - tw) / 2, font: BarStyle.chipFont,
+            let tw = measure(buttonLabel, font: BarStyle.chipFont)
+            _ = text(buttonLabel, x: r.minX + (r.width - tw) / 2, font: BarStyle.chipFont,
                      color: NSColor(white: 1, alpha: 0.95), maxWidth: r.width)
             layout.approvalRect = r
-            x = max(x, r.maxX)
         }
 
-        layout.primaryRect = NSRect(x: 0, y: 0, width: max(x, BarStyle.padding), height: rect.height)
+        layout.primaryRect = NSRect(x: 0, y: 0, width: rect.width, height: rect.height)
         layout.cards.append((layout.primaryRect!, primary.jumpUrl, primary.cwd))
         return layout
     }

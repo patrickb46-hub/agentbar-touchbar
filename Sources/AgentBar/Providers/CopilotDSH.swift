@@ -6,8 +6,10 @@ import Foundation
 /// 事件：session.start / user.message / system.message / assistant.turn_start /
 ///       assistant.message（带 toolRequests）/ assistant.turn_end /
 ///       session.shutdown / session.error / abort
-struct CopilotAdapter {
+final class CopilotAdapter {
     let root = Paths.home.appendingPathComponent(".copilot/session-state", isDirectory: true)
+    /// 进程内计时，避开不同时钟源
+    private var turnClock: [String: (key: Int64, at: TimeInterval)] = [:]
 
     func scan(now: Date = Date()) -> [AgentSnapshot] {
         guard FileManager.default.fileExists(atPath: root.path) else { return [] }
@@ -85,6 +87,24 @@ struct CopilotAdapter {
         }
         if phase == .idle, !force { return nil }
 
+        let turnKey = Int64(turnStartMs ?? userMs ?? 0)
+        var startedAt: Int64?
+        if phase != .done {
+            if let cached = turnClock[sessionId], cached.key == turnKey {
+                startedAt = Int64(cached.at * 1000)
+            } else {
+                turnClock[sessionId] = (turnKey, Date().timeIntervalSince1970)
+                startedAt = Int64(Date().timeIntervalSince1970 * 1000)
+            }
+        } else {
+            turnClock[sessionId] = nil
+        }
+
+        var durationMs: Int64?
+        if phase == .done, let u = userMs, let t = turnStartMs, t >= u {
+            durationMs = Int64(t - u)
+        }
+
         return AgentSnapshot(
             provider: "copilot-cli",
             sessionId: sessionId,
@@ -93,9 +113,10 @@ struct CopilotAdapter {
             phase: phase,
             tool: tool,
             note: nil,
-            turnStartedAt: Int64(turnStartMs ?? userMs ?? lastMs),
+            turnStartedAt: startedAt,
             updatedAt: Int64(lastMs > 0 ? lastMs : Date().timeIntervalSince1970 * 1000),
-            jumpUrl: nil
+            jumpUrl: nil,
+            durationMs: durationMs
         )
     }
 }

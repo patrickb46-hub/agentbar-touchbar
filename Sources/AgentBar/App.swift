@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusLabel = NSMenuItem(title: "启动中…", action: nil, keyEquivalent: "")
     private var attachLabel = NSMenuItem(title: "Touch Bar", action: nil, keyEquivalent: "")
     private var timer: Timer?
+    private var lastTraceTick = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
@@ -69,6 +70,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let attached = host.isAttached
         attachLabel.title = attached ? "Touch Bar：已接管" : "Touch Bar：未接管（仅菜单栏）"
+
+        // 每 30 秒记一次当前状态与耗时，方便排查「数字不对」这类问题
+        let nowTick = Int(Date().timeIntervalSince1970)
+        if nowTick % 30 == 0, lastTraceTick != nowTick {
+            lastTraceTick = nowTick
+            let elapsed = model.primary?.elapsed.map { String(Int($0)) } ?? "-"
+            Log.write("追踪：状态=\(model.primary?.phase.rawValue ?? "无") 耗时=\(elapsed)s 卡片=\(model.others.count + (model.primary == nil ? 0 : 1))")
+        }
 
         if let primary = model.primary, primary.isLive || primary.phase == .done {
             let elapsed = primary.elapsed.map { " " + clockText($0) } ?? ""

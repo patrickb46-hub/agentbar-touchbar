@@ -217,9 +217,10 @@ enum BarRenderer {
             x += text("\(today.turns) 轮", x: x, font: BarStyle.statusFont, color: BarStyle.primaryText) + 14
             x += text("·", x: x, font: BarStyle.bodyFont, color: BarStyle.faintText) + 12
             x += text(today.durationText, x: x, font: BarStyle.monoFont, color: BarStyle.primaryText) + 14
-            if let usage = today.usageText {
+            if today.credits > 0 {
                 x += text("·", x: x, font: BarStyle.bodyFont, color: BarStyle.faintText) + 12
-                x += text(usage, x: x, font: BarStyle.monoFont, color: BarStyle.secondaryText) + 12
+                x += text(String(format: "%.1f 积分", today.credits), x: x,
+                          font: BarStyle.bodyFont, color: BarStyle.secondaryText) + 12
             }
         }
 
@@ -241,9 +242,7 @@ enum BarRenderer {
 
     private static func todaySummary(_ today: TodayStats) -> String? {
         guard !today.isEmpty else { return nil }
-        var parts = ["今日 \(today.turns) 轮", today.durationText]
-        if let usage = today.usageText { parts.append(usage) }
-        return parts.joined(separator: " · ")
+        return "今日 \(today.turns) 轮"
     }
 
     // MARK: - 标尺（量真实宽度用）

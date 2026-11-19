@@ -13,13 +13,17 @@ import Foundation
 ///   function_call 无 result  → 正在跑该工具
 ///   message(role=assistant)  → 回合关闭 → 完成
 ///   「等你确认」不看时长，看 ~/.workbuddy/audit-log 里的 ask-matched / needs-approval
-struct WorkBuddyAdapter {
+final class WorkBuddyAdapter {
     let provider: String
     let root: URL
 
     /// 只有最近改动过的文件才值得每秒解析
-    private static var candidates: [URL] = []
-    private static var candidateStamp: TimeInterval = 0
+    private var candidates: [URL] = []
+    private var candidateStamp: TimeInterval = 0
+
+    /// 用进程自己的时钟记「第一次看到这一轮」的时刻，
+    /// 避免日志时间戳与系统时钟不同源导致耗时算成几小时。
+    private var turnClock: [String: (key: Int64, at: TimeInterval)] = [:]
 
     init(provider: String = "workbuddy-desktop",
          root: URL = Paths.home.appendingPathComponent(".workbuddy/projects", isDirectory: true)) {
@@ -32,8 +36,8 @@ struct WorkBuddyAdapter {
     }
 
     private func refreshCandidates(now: Date) {
-        if now.timeIntervalSince1970 - Self.candidateStamp < 8, !Self.candidates.isEmpty { return }
-        Self.candidateStamp = now.timeIntervalSince1970
+        if now.timeIntervalSince1970 - candidateStamp < 8, !candidates.isEmpty { return }
+        candidateStamp = now.timeIntervalSince1970
 
         var found: [URL] = []
         let cutoff = now.addingTimeInterval(-12 * 3600)
@@ -42,7 +46,7 @@ struct WorkBuddyAdapter {
                 if FileUtil.mtime(file) > cutoff { found.append(file) }
             }
         }
-        Self.candidates = found
+        candidates = found
     }
 
     func scan(now: Date = Date()) -> [AgentSnapshot] {
@@ -50,7 +54,7 @@ struct WorkBuddyAdapter {
         refreshCandidates(now: now)
 
         var out: [AgentSnapshot] = []
-        for file in Self.candidates {
+        for file in candidates {
             let age = now.timeIntervalSince(FileUtil.mtime(file))
             if age > 3 * 3600 { continue }
             if let snap = parse(file: file, now: now) { out.append(snap) }
@@ -144,6 +148,26 @@ struct WorkBuddyAdapter {
 
         if phase == .idle { return nil }
 
+        // 本轮起点：用进程时钟记第一次观察时间
+        let turnKey = Int64(p.lastUserMs ?? 0)
+        var startedAt: Int64?
+        if phase != .done {
+            if let cached = turnClock[sessionId], cached.key == turnKey {
+                startedAt = Int64(cached.at * 1000)
+            } else {
+                turnClock[sessionId] = (turnKey, now.timeIntervalSince1970)
+                startedAt = Int64(now.timeIntervalSince1970 * 1000)
+            }
+        } else {
+            turnClock[sessionId] = nil
+        }
+
+        // 本轮耗时：两端都取日志里的时间戳，天然同源
+        var durationMs: Int64?
+        if phase == .done, let user = p.lastUserMs, let done = p.lastAssistantMs, done >= user {
+            durationMs = Int64(done - user)
+        }
+
         let project = (p.cwd.map { ($0 as NSString).lastPathComponent })
             ?? file.deletingLastPathComponent().lastPathComponent
         let jump = "workbuddy://chat/"
@@ -157,9 +181,10 @@ struct WorkBuddyAdapter {
             phase: phase,
             tool: tool,
             note: audit.isWaiting ? audit.reason : nil,
-            turnStartedAt: p.lastUserMs.map { Int64($0) },
+            turnStartedAt: startedAt,
             updatedAt: Int64(p.lastEntryMs),
-            jumpUrl: jump
+            jumpUrl: jump,
+            durationMs: durationMs
         )
     }
 

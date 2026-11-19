@@ -47,6 +47,8 @@ struct AgentSnapshot {
     var turnStartedAt: Int64?   // ms
     var updatedAt: Int64        // ms
     var jumpUrl: String?
+    /// 本轮真实耗时（来自日志自身的时间戳，跨时钟源也可靠）
+    var durationMs: Int64? = nil
 
     /// 排序权重：等你 > 干活 > 出错 > 刚完成
     var priority: Int {
@@ -81,8 +83,8 @@ struct AgentSnapshot {
 
     /// 已完成状态下这一轮实际花了多久
     var turnDuration: TimeInterval? {
-        guard phase == .done, let start = turnStartedAt else { return nil }
-        return Self.sane(Double(updatedAt) - Double(start))
+        guard let ms = durationMs else { return nil }
+        return Double(ms) / 1000.0
     }
 }
 

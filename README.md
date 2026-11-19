@@ -118,6 +118,7 @@ agentbar                     # 启动（菜单栏 App + 接管 Touch Bar）
 agentbar render --multi      # 把界面渲染成 PNG，不需要 Touch Bar 硬件
 agentbar dump                # 以 JSON 打印当前识别到的所有 agent
 agentbar probe --provider dsh --limit 5   # 调试：解析会话文件，忽略空闲过滤
+agentbar audit <sessionId>   # 调试：这条会话现在是否在等你确认
 agentbar report ...          # 上报一条状态
 agentbar hook                # hook 模式
 agentbar clean               # 清掉上报的状态文件
@@ -132,7 +133,7 @@ agentbar clean               # 清掉上报的状态文件
 - **私有 API**：靠 `NSTouchBar` 的 system-modal 接口接管 Touch Bar。所有私有符号都做了存在性判断，缺了就降级成「只在菜单栏显示」，但 macOS 大版本升级仍可能失效
 - **同一时间只能有一个 Touch Bar 宿主**：和 MTMR / BetterTouchTool / Pock 互斥，同时开会抢屏
 - **WorkBuddy 升级可能改日志格式**：解析器对未知字段宽容，真变了会退回 `agentbar hook` 通道
-- **「待确认」是推断**：日志里「工具已调用但无结果 + 静默」≈ 等你点头。长命令（build / install / curl…）会放宽到 120 秒并标注「可能待确认」，避免误报
+- **「待确认」来自应用自己的审计日志**：WorkBuddy 会把每次工具调用的安全裁决写进 `~/.workbuddy/audit-log/`（`ask-matched` → 你点了才有 `approved`），AgentBar 读这个，不靠静默时长猜，长命令不会被误报
 - 只在 **2018 款 15 寸 Intel MacBook Pro（macOS 15.8）** 上实测过；13 / 16 寸的宽度是自动读取的，但没验证
 
 ---
@@ -154,6 +155,7 @@ Sources/AgentBar/
 ├── Store.swift            多来源聚合、优先级排序、今日统计
 ├── Providers/
 │   ├── WorkBuddy.swift    WorkBuddy / CodeBuddy 会话日志
+│   ├── AuditLog.swift     审计日志：判断是否真的在等你确认
 │   ├── CopilotDSH.swift   Copilot CLI 与 dsh
 │   └── JSONLTail.swift    大文件尾部解析工具
 └── CLI.swift              report / hook / render / dump / probe

@@ -12,6 +12,8 @@ enum SelfTest {
         var name: String?
         var callId: String?
         var offset: Double      // 相对 T0 的秒数
+        /// 只给 ai-title 条目用：会话名
+        var aiTitle: String? = nil
     }
 
     private static var failures = 0
@@ -38,6 +40,7 @@ enum SelfTest {
                 if let role = row.role { obj["role"] = role }
                 if let name = row.name { obj["name"] = name }
                 if let callId = row.callId { obj["callId"] = callId }
+                if let aiTitle = row.aiTitle { obj["aiTitle"] = aiTitle }
                 return (try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]))
                     .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
             }
@@ -61,6 +64,16 @@ enum SelfTest {
         }
 
         print("WorkBuddy 状态机自检")
+
+        /// 卡片名：会话名优先，拿不到才退回工作区目录名
+        func checkName(_ title: String, file: URL, at offset: Double, expect: String) {
+            checks += 1
+            let now = base.addingTimeInterval(offset)
+            let actual = adapter.snapshot(file, at: now)?.displayName
+            let ok = actual == expect
+            if !ok { failures += 1 }
+            print("\(ok ? "  ok  " : "  FAIL") \(title)：期望「\(expect)」，实际「\(actual ?? "-")」")
+        }
 
         // 1. 新回合刚开始：user 消息之后，首条条目要 3.6～12.7 秒才落盘。
         //    旧逻辑在这里会因为「存在上一轮的 assistant 消息」直接判完成。
@@ -129,6 +142,17 @@ enum SelfTest {
 
         // 8. 长时间没动静：卡片消失，而不是永远挂着
         check("user 后静默 11 分钟", file: start, at: 670, expect: nil)
+
+        // 9. 卡片名用会话名（ai-title），不用工作区目录名
+        let named = fixture("named", [
+            Row(type: "message", role: "user", offset: 0),
+            Row(type: "ai-title", offset: 0.5, aiTitle: "让 Touch Bar 始终保持常亮"),
+            Row(type: "message", role: "assistant", offset: 4)
+        ])
+        checkName("ai-title 当卡片名", file: named, at: 6, expect: "让 Touch Bar 始终保持常亮")
+
+        // 10. 没有 ai-title（自动化会话 / 长会话读不到）→ 退回工作区目录名，不能显示成空
+        checkName("没有会话名时退回目录名", file: start, at: 3, expect: "agentbar-selftest")
 
         print(failures == 0
               ? "全部通过（\(checks) 项）"

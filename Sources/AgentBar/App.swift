@@ -157,13 +157,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions {
     private func signature(_ model: BarModel) -> String {
         var parts: [String] = ["r\(AgentBarConfig.revision)"]
         if let p = model.primary {
-            parts.append("p|\(p.provider)|\(p.sessionId)|\(p.phase.rawValue)|\(p.project)"
+            parts.append("p|\(p.provider)|\(p.sessionId)|\(p.phase.rawValue)|\(p.displayName)"
                         + "|\(p.tool ?? "")|\(p.note ?? "")|\(Int(p.elapsed ?? p.turnDuration ?? 0))")
         } else {
             parts.append("p|-")
         }
         for o in model.others {
-            parts.append("o|\(o.provider)|\(o.sessionId)|\(o.phase.rawValue)|\(o.project)"
+            parts.append("o|\(o.provider)|\(o.sessionId)|\(o.phase.rawValue)|\(o.displayName)"
                         + "|\(o.tool ?? "")|\(Int(o.elapsed ?? 0))")
         }
         parts.append("t|\(model.today.turns)|\(Int(model.today.seconds))|\(model.today.tokens ?? 0)"
@@ -320,7 +320,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions {
         var title = ""
         if let primary = model.primary, primary.isLive || primary.phase == .done {
             let elapsed = primary.elapsed.map { " " + clockText($0) } ?? ""
-            statusLabel.title = "\(primary.phase.label)\(elapsed) · \(primary.project)"
+            statusLabel.title = "\(primary.phase.label)\(elapsed) · \(primary.displayName)"
             title = AgentBarConfig.menuTitle ? " \(primary.phase.label)\(elapsed)" : ""
         } else if model.today.isEmpty {
             statusLabel.title = "暂无 AI 活动"
@@ -359,7 +359,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PanelActions {
 
         if let p = model.primary {
             let elapsed = (p.elapsed ?? p.turnDuration).map { " · " + clockText($0) } ?? ""
-            center.statusLine = "\(p.phase.label)\(elapsed) · \(p.project)"
+            center.statusLine = "\(p.phase.label)\(elapsed) · \(p.displayName)"
             var detail = providerShort(p.provider)
             if let tool = p.tool, !tool.isEmpty, p.phase != .done { detail += " · \(tool)" }
             if model.others.count > 0 { detail += " · 另外 \(model.others.count) 个会话" }

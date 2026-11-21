@@ -14,6 +14,11 @@ import Foundation
 ///   message(role=assistant) 且是末条  → 停顿一小会儿后 → 完成
 ///   「等你确认」不看时长，看 ~/.workbuddy/audit-log 里的 ask-matched / needs-approval
 ///
+/// 卡片名（会话名，不是工作区目录名）：
+///   `ai-title` 条目（会话开头写一次）→ `session-meta` 里顺带的那份（每个回合都有，
+///   长会话也能从尾部读到）→ `workbuddy.db` 的 sessions 表（见 SessionTitles）。
+///   三样都没有才退回 `cwd` 最后一段。
+///
 /// 关键教训（2026-11-19 回归）：**只有 assistant 消息落在尾部才可能是完成**。
 /// 实测数据：工具结果之后模型重新开口的中位间隔 4.8 秒（p90 15.7 秒），
 /// 新回合 user 消息之后首条条目要 3.6～12.7 秒。
@@ -148,6 +153,9 @@ final class WorkBuddyAdapter {
     private struct Parsed {
         var sessionId = ""
         var cwd: String?
+        /// 会话名：从 `ai-title` 条目或 `session-meta` 里带出来的标题。
+        /// 只做「有则更新」，因为会话名可能在应用里被改名。
+        var title: String?
         var lastUserMs: Double?
         var lastAssistantMs: Double?
         /// 任何条目的最新时间戳（含记账类），只用来判「这个会话还新不新」
@@ -204,12 +212,40 @@ final class WorkBuddyAdapter {
                 if cwd == nil, let meta = obj["meta"] as? [String: Any] {
                     cwd = meta["cwd"] as? String
                 }
-            // credit-usage / file-history-snapshot / ai-title / model-usage 等是记账条目，
+                // session-meta 会把当前会话标题顺带记一份
+                // （meta["codebuddy.ai/sessionTitle"] = [{type: ai-title, aiTitle: ...}]），
+                // 长会话的 ai-title 条目在文件开头读不到，靠这个补上
+                if let meta = obj["meta"] as? [String: Any],
+                   let carried = WorkBuddyAdapter.sessionTitle(in: meta), !carried.isEmpty {
+                    title = carried
+                }
+            case "ai-title":
+                if let name = (obj["aiTitle"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !name.isEmpty {
+                    title = name
+                }
+            // credit-usage / file-history-snapshot / model-usage 等是记账条目，
             // 会在回合结束后几秒内才落盘，不能拿它们推进「静默计时」，否则完成态会被推迟。
             default:
                 break
             }
         }
+    }
+
+    /// session-meta 里带的会话标题：值形如 `[{type: ai-title, aiTitle: "..."}]`。
+    /// 键名带命名空间（`codebuddy.ai/sessionTitle`），认「含 sessiontitle」而不是写死。
+    private static func sessionTitle(in meta: [String: Any]) -> String? {
+        for (key, value) in meta {
+            guard key.lowercased().contains("sessiontitle"),
+                  let list = value as? [[String: Any]] else { continue }
+            for item in list.reversed() {
+                if let name = (item["aiTitle"] as? String)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+                    return name
+                }
+            }
+        }
+        return nil
     }
 
     /// 判定用的时间常数（秒）。改之前先看注释里的实测值。
@@ -290,6 +326,9 @@ final class WorkBuddyAdapter {
 
         let project = (p.cwd.map { ($0 as NSString).lastPathComponent })
             ?? file.deletingLastPathComponent().lastPathComponent
+        // 卡片显示会话名，不再显示工作区目录名：用户改过的名 > 日志里的 ai-title > 库里自动标题。
+        // 三个都拿不到（极端情况）才退回目录名。
+        let title = SessionTitles.shared.name(for: sessionId, logTitle: p.title)
         let jump = "workbuddy://chat/"
             + (sessionId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionId)
 
@@ -297,6 +336,7 @@ final class WorkBuddyAdapter {
             provider: provider,
             sessionId: sessionId,
             project: project.isEmpty ? provider : project,
+            title: title,
             cwd: p.cwd,
             phase: phase,
             tool: tool,

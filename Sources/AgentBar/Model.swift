@@ -39,7 +39,10 @@ enum Phase: String {
 struct AgentSnapshot {
     var provider: String
     var sessionId: String
+    /// 工作区目录名，只用来兜底和区分跳转目标，不再直接上屏
     var project: String
+    /// 会话名：用户在应用里改过的名字 / ai-title / 库里自动标题
+    var title: String? = nil
     var cwd: String?
     var phase: Phase
     var tool: String?
@@ -54,6 +57,17 @@ struct AgentSnapshot {
     var costCNY: Double? = nil
     /// 该来源没有深链时，优先激活这个应用（而不是打开文件夹）
     var jumpApp: String? = nil
+
+    /// 卡片上显示的名字：会话名优先。
+    ///
+    /// 同一工作区目录下可以开很多个会话（`2026-11-21-12-16-41` 这种目录名一模一样），
+    /// 所以目录名只能当兜底 —— 拿不到会话名时才退回去。
+    var displayName: String {
+        if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            return title
+        }
+        return project.isEmpty ? provider : project
+    }
 
     /// 显示分组（数字小的排左边）：需要处理 > 进行中 > 已完成
     ///
@@ -182,6 +196,8 @@ struct RawState {
     var sessionId: String = ""
     var cwd: String?
     var project: String?
+    /// 会话名（可选）：给了就显示它，不给退回 project / cwd
+    var title: String?
     var state: String = "idle"
     var tool: String?
     var turnStartedAt: Int64?
@@ -206,6 +222,7 @@ struct RawState {
         self.sessionId = (json["sessionId"] as? String) ?? (json["session_id"] as? String) ?? ""
         self.cwd = json["cwd"] as? String
         self.project = json["project"] as? String
+        self.title = (json["title"] as? String) ?? (json["sessionTitle"] as? String)
         self.state = (json["state"] as? String) ?? "idle"
         self.tool = json["tool"] as? String
         self.turnStartedAt = (json["turnStartedAt"] as? NSNumber)?.int64Value
@@ -220,6 +237,7 @@ struct RawState {
             provider: provider,
             sessionId: sessionId,
             project: p.isEmpty ? provider : p,
+            title: title,
             cwd: cwd,
             phase: phase,
             tool: tool,

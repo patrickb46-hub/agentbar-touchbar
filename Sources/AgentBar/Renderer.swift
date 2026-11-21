@@ -91,8 +91,8 @@ enum BarRenderer {
         BarStyle.phaseTint(target.phase).setFill()
         NSBezierPath(ovalIn: dotRect).fill()
         x += 16
-        x += text(target.project, x: x, font: BarStyle.cardFont,
-                  color: BarStyle.primaryText, maxWidth: 180) + 18
+        x += text(target.displayName, x: x, font: BarStyle.cardFont,
+                  color: BarStyle.primaryText, maxWidth: 220) + 18
 
         let items: [(String, BarAction, NSColor)] = [
             ("只看这个", .focus, accent),
@@ -184,13 +184,13 @@ enum BarRenderer {
             _ = text(info, x: cardRect.maxX - 9 - infoWidth, font: infoFont, color: infoColor,
                      maxWidth: infoWidth + 2)
 
-            // 中间：软件名 · 项目名（窄卡片只留项目名，靠底色区分软件）
+            // 中间：软件名 · 会话名（窄卡片只留会话名，靠底色区分软件）
             let textX = dotCenter.x + 9
             let textMax = cardRect.maxX - 9 - infoWidth - 8 - textX
             if textMax > 16 {
                 let label = cardWidth >= 210
-                    ? "\(providerShort(agent.provider)) · \(agent.project)"
-                    : agent.project
+                    ? "\(providerShort(agent.provider)) · \(agent.displayName)"
+                    : agent.displayName
                 _ = text(label, x: textX, font: BarStyle.cardFont,
                          color: BarStyle.cardText(done: agent.phase == .done),
                          maxWidth: textMax)
@@ -251,7 +251,7 @@ enum BarRenderer {
             x += text(clockText(seconds), x: x, font: BarStyle.monoFont, color: BarStyle.secondaryText) + 16
         }
 
-        // 尾部元素先算宽度，剩下的才是项目名的
+        // 尾部元素先算宽度，剩下的才是会话名的
         var chipLabel: String?
         if structure.showTool, let tool = primary.tool, !tool.isEmpty, primary.phase != .done {
             chipLabel = shortTool(tool)
@@ -264,7 +264,7 @@ enum BarRenderer {
             let sepW: CGFloat = 12
             let projectMax = max(48, rightEdge - reserve - x - sepW - chipW - othersW - 8)
             x += text("·", x: x, font: BarStyle.bodyFont, color: BarStyle.faintText) + sepW
-            x += text(primary.project, x: x, font: BarStyle.bodyFont, color: BarStyle.primaryText,
+            x += text(primary.displayName, x: x, font: BarStyle.bodyFont, color: BarStyle.primaryText,
                       maxWidth: projectMax) + 12
         }
 

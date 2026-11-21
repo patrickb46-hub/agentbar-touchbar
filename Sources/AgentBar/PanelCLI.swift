@@ -46,22 +46,24 @@ enum PanelCLI {
             Store.shared.syncToday()
             let model = Store.shared.model()
             center.model = model
-            center.statusLine = model.primary.map { "\($0.phase.label) · \($0.project)" } ?? "暂无 AI 活动"
+            center.statusLine = model.primary.map { "\($0.phase.label) · \($0.displayName)" } ?? "暂无 AI 活动"
             center.detailLine = model.primary.map { providerShort($0.provider) } ?? ""
             center.cpu = "-"
         } else {
             let now = nowMs()
             let live = AgentSnapshot(provider: "workbuddy-desktop", sessionId: "demo",
-                                     project: "Genius Touch Bar", cwd: nil, phase: .thinking,
+                                     project: "Genius Touch Bar", title: "让 Touch Bar 始终保持常亮",
+                                     cwd: nil, phase: .thinking,
                                      tool: nil, note: nil, turnStartedAt: now - 96_000,
                                      updatedAt: now, jumpUrl: nil)
             let other = AgentSnapshot(provider: "copilot-cli", sessionId: "demo2",
-                                      project: "Stock Market Sim", cwd: nil, phase: .waitingApproval,
+                                      project: "Stock Market Sim", title: "修复回测脚本的时区问题",
+                                      cwd: nil, phase: .waitingApproval,
                                       tool: nil, note: nil, turnStartedAt: now - 42_000,
                                       updatedAt: now, jumpUrl: nil)
             center.model = BarModel(primary: live, others: [other],
                                     today: TodayStats(turns: 12, seconds: 6420, tokens: 38_200), tick: 3)
-            center.statusLine = "思考中 · Genius Touch Bar"
+            center.statusLine = "思考中 · 让 Touch Bar 始终保持常亮"
             center.detailLine = "WorkBuddy · 另外 1 个会话"
             center.cpu = "0.4%"
         }

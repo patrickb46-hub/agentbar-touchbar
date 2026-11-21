@@ -26,7 +26,8 @@ enum CLI {
       --state 状态        thinking | tool | waiting_approval | done | error | idle
       --tool 工具名       例如 Bash
       --cwd 目录          默认当前目录
-      --project 名称      默认取 cwd 最后一段
+      --project 名称      工作区名，默认取 cwd 最后一段
+      --title 名称        会话名（没有就显示工作区名）
       --since 毫秒时间戳   本轮开始时间，默认现在
       --jump URL          点击 Touch Bar 时打开的链接
     """
@@ -72,6 +73,7 @@ enum CLI {
         if let tool = kv["tool"] { obj["tool"] = tool }
         if let jump = kv["jump"] { obj["jumpUrl"] = jump }
         if let note = kv["note"] { obj["note"] = note }
+        if let title = kv["title"], !title.isEmpty { obj["title"] = title }
 
         writeState(obj, provider: provider, session: session)
     }
@@ -146,6 +148,7 @@ enum CLI {
             "provider": s.provider,
             "session": s.sessionId,
             "project": s.project,
+            "name": s.displayName,
             "phase": s.phase.rawValue,
             "group": s.displayGroup,
             "updatedAt": s.updatedAt
@@ -207,17 +210,18 @@ enum CLI {
         var model: BarModel
         if kv["multi"] != nil {
             let now = nowMs()
-            func demo(_ provider: String, _ project: String, _ phase: Phase,
-                      _ elapsed: Double, _ tool: String?) -> AgentSnapshot {
-                AgentSnapshot(provider: provider, sessionId: project, project: project, cwd: nil,
+            func demo(_ provider: String, _ project: String, _ title: String,
+                      _ phase: Phase, _ elapsed: Double, _ tool: String?) -> AgentSnapshot {
+                AgentSnapshot(provider: provider, sessionId: project, project: project, title: title,
+                              cwd: nil,
                               phase: phase, tool: tool, note: nil,
                               turnStartedAt: now - Int64(elapsed * 1000), updatedAt: now,
                               jumpUrl: nil)
             }
             let agents = [
-                demo("workbuddy-desktop", "Genius Touch Bar", .tool, 143, "Bash"),
-                demo("copilot-cli", "Stock Market Sim", .waitingApproval, 62, nil),
-                demo("dsh", "DSH Plugins", .thinking, 27, nil)
+                demo("workbuddy-desktop", "Genius Touch Bar", "让 Touch Bar 始终保持常亮", .tool, 143, "Bash"),
+                demo("copilot-cli", "Stock Market Sim", "修复回测脚本的时区问题", .waitingApproval, 62, nil),
+                demo("dsh", "DSH Plugins", "给 dsh 插件加超时重试", .thinking, 27, nil)
             ]
             model = BarModel(primary: agents[0], others: Array(agents.dropFirst()),
                              today: TodayStats(turns: 12, seconds: 6420, credits: 4.2), tick: 3)
@@ -232,6 +236,7 @@ enum CLI {
                 provider: "workbuddy-desktop",
                 sessionId: "demo",
                 project: kv["project"] ?? "Genius Touch Bar",
+                title: kv["title"],
                 cwd: nil,
                 phase: phase,
                 tool: kv["tool"] ?? "Bash",
@@ -325,7 +330,7 @@ extension CLI {
             let snap = provider == "dsh" ? DSHAdapter().debugParse(url) : CopilotAdapter().debugParse(url)
             guard let s = snap else { print("解析失败"); return }
             let tool = s.tool.map { " tool=\($0)" } ?? ""
-            print("\(s.phase.rawValue)  \(providerShort(s.provider)) · \(s.project)\(tool)  cwd=\(s.cwd ?? "-")")
+            print("\(s.phase.rawValue)  \(providerShort(s.provider)) · \(s.displayName)\(tool)  cwd=\(s.cwd ?? "-")")
             return
         }
         var files: [URL] = []
@@ -353,7 +358,7 @@ extension CLI {
             let stamp = ISODate.short(FileUtil.mtime(file))
             if let s = snap {
                 let tool = s.tool.map { " tool=\($0)" } ?? ""
-                print("[\(stamp)] \(s.phase.rawValue)  \(providerShort(s.provider)) · \(s.project)\(tool)  cwd=\(s.cwd ?? "-")")
+                print("[\(stamp)] \(s.phase.rawValue)  \(providerShort(s.provider)) · \(s.displayName)\(tool)  cwd=\(s.cwd ?? "-")")
             } else {
                 print("[\(stamp)] 解析失败或空")
             }

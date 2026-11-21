@@ -80,12 +80,14 @@ autostart: install
 	launchctl bootstrap gui/$$(id -u) $(HOME)/Library/LaunchAgents/com.string255.agentbar.plist
 	@echo "已设置登录自启"
 
+# 预览图里的主题写死，别跟着本机 ~/.agentbar/config.json 变 —— 否则换一次主题
+# 文档里的图片就跟着变一遍。会话名也一样，用 --title 固定。
 preview:
 	swift build $(SWIFT_FLAGS)
-	.build/debug/agentbar render --multi --width 680 --out docs/preview-multi.png
-	.build/debug/agentbar render --live --state waiting_approval --tool Edit --elapsed 12 --width 680 --out docs/preview-approval.png
-	.build/debug/agentbar render --idle --width 680 --out docs/preview-idle.png
-	.build/debug/agentbar render --multi --width 680 --theme paper --out docs/preview-paper.png
+	.build/debug/agentbar render --multi --theme midnight --width 680 --out docs/preview-multi.png
+	.build/debug/agentbar render --live --theme midnight --state waiting_approval --tool Edit --title "让 Touch Bar 始终保持常亮" --elapsed 12 --width 680 --out docs/preview-approval.png
+	.build/debug/agentbar render --idle --theme midnight --width 680 --out docs/preview-idle.png
+	.build/debug/agentbar render --multi --theme paper --width 680 --out docs/preview-paper.png
 	.build/debug/agentbar panel --out docs/preview-panel.png
 
 sign-cert:

@@ -15,7 +15,8 @@ AgentBar 只做两件事：**读状态**、**画出来**。所以接一个新工
 | `provider` | String | 来源名，决定卡片底色。内置识别 `workbuddy` / `copilot` / `dsh` / `claude` / `codex`，其它按名字散列到柔和色 |
 | `sessionId` | String | 会话标识，同 provider 内唯一 |
 | `state` | String | `thinking` / `tool` / `waiting_approval` / `done` / `error` / `idle` |
-| `project` | String? | 显示在卡片上的名字，默认取 `cwd` 最后一段 |
+| `title` | String? | **卡片上显示的名字**：会话名。给了就用它 |
+| `project` | String? | 工作区名，默认取 `cwd` 最后一段；只在没有 `title` 时兜底显示 |
 | `tool` | String? | 当前工具名，例如 `Bash` |
 | `cwd` | String? | 工作目录。没有可跳转的深链时，点击会打开这个目录 |
 | `turnStartedAt` | Int64? | 本轮开始时间（毫秒），用来算耗时 |
@@ -46,6 +47,7 @@ agentbar report \
   --tool Bash \
   --cwd "$PWD" \
   --project "我的项目" \
+  --title "修一下登录页的报错" \
   --since 1795042556000 \
   --jump "mytool://session/$SESSION_ID"
 ```

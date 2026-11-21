@@ -378,7 +378,7 @@ struct PanelView: View {
                 toggleChip("耗时", isOn: Binding(
                     get: { binding.wrappedValue.showElapsed },
                     set: { var s = binding.wrappedValue; s.showElapsed = $0; binding.wrappedValue = s }))
-                toggleChip("项目名", isOn: Binding(
+                toggleChip("会话名", isOn: Binding(
                     get: { binding.wrappedValue.showProject },
                     set: { var s = binding.wrappedValue; s.showProject = $0; binding.wrappedValue = s }))
                 toggleChip("工具标签", isOn: Binding(

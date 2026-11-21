@@ -5,3 +5,4 @@ build/
 .DS_Store
 agentbar-preview.png
 *.log
+.workbuddy/

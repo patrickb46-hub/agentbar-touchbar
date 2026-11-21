@@ -55,16 +55,24 @@ struct AgentSnapshot {
     /// 该来源没有深链时，优先激活这个应用（而不是打开文件夹）
     var jumpApp: String? = nil
 
-    /// 排序权重：等你 > 干活 > 出错 > 刚完成
-    var priority: Int {
+    /// 显示分组（数字小的排左边）：需要处理 > 进行中 > 已完成
+    ///
+    /// 只看「阶段」这一个维度，不看更新时间 —— 更新时刻每秒都在变，
+    /// 拿它当排序依据，卡片就会一直左右换位置。
+    /// 出错和待确认一样要人看一眼，所以同属「需要处理」。
+    var displayGroup: Int {
         switch phase {
-        case .waitingApproval: return 5
-        case .tool: return 4
-        case .thinking: return 4
-        case .error: return 3
-        case .done: return 2
-        case .idle: return 1
+        case .waitingApproval, .error: return 0   // 需要处理
+        case .thinking, .tool: return 1           // 进行中
+        case .done: return 2                      // 已完成
+        case .idle: return 3
         }
+    }
+
+    /// 组内的固定锚点：本轮开始时间；缺了才退回「第一次被看到的时间」。
+    /// 用它排序，同一组里的卡片位置只在这轮换人开始时变一次，不会来回抖。
+    func sortAnchor(firstSeen: Int64) -> Int64 {
+        turnStartedAt ?? firstSeen
     }
 
     var isLive: Bool {
@@ -94,7 +102,8 @@ struct AgentSnapshot {
 }
 
 /// 每个来源一个固定色，多进程并排时靠底色区分是哪个软件
-func providerTint(_ provider: String) -> NSColor {    let p = provider.lowercased()
+func providerAccent(_ provider: String) -> NSColor {
+    let p = provider.lowercased()
     if p.contains("workbuddy") || p.contains("codebuddy") {
         return NSColor(srgbRed: 0.29, green: 0.62, blue: 1.00, alpha: 1)   // 蓝
     }

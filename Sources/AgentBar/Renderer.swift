@@ -17,10 +17,31 @@ enum BarStyle {
     static let height: CGFloat = 30
     static let padding: CGFloat = 24
     static let rightPadding: CGFloat = 12
-    static let background = NSColor(srgbRed: 0.039, green: 0.039, blue: 0.047, alpha: 1)
-    static let primaryText = NSColor(white: 0.95, alpha: 1)
-    static let secondaryText = NSColor(white: 0.62, alpha: 1)
-    static let faintText = NSColor(white: 0.42, alpha: 1)
+
+    /// 当前主题与结构，由 BarView 在每次绘制前刷新；面板改配置后立刻生效
+    static var theme: Theme = Themes.midnight
+    static var structure = Structure()
+
+    static var background: NSColor { theme.background }
+    static var primaryText: NSColor { theme.primaryText }
+    static var secondaryText: NSColor { theme.secondaryText }
+    static var faintText: NSColor { theme.faintText }
+    static var surfaceFill: NSColor { theme.surfaceFill }
+    static var surfaceStroke: NSColor { theme.surfaceStroke }
+    static var strongFill: NSColor { theme.strongFill }
+    static var strongStroke: NSColor { theme.strongStroke }
+    static var accent: NSColor { theme.accent }
+
+    static func tint(_ color: NSColor) -> NSColor { Themes.adapt(color, light: theme.isLight) }
+    static func phaseTint(_ phase: Phase) -> NSColor { tint(phase.tint) }
+    static func providerTint(_ provider: String) -> NSColor { tint(providerAccent(provider)) }
+
+    /// 卡片里项目名的颜色：完成态淡一点
+    static func cardText(done: Bool) -> NSColor {
+        theme.isLight
+            ? NSColor(white: done ? 0.42 : 0.13, alpha: 1)
+            : NSColor(white: done ? 0.68 : 0.94, alpha: 1)
+    }
 
     static let statusFont = NSFont.systemFont(ofSize: 13.5, weight: .semibold)
     static let bodyFont = NSFont.systemFont(ofSize: 13, weight: .regular)
@@ -43,16 +64,17 @@ enum BarRenderer {
 
         if let target { return drawActionRow(target, in: rect) }
 
+        let structure = BarStyle.structure
         var agents: [AgentSnapshot] = []
         if let primary = model.primary { agents.append(primary) }
         agents.append(contentsOf: model.others)
         agents = agents.filter { $0.isLive || $0.phase == .done }
 
-        if agents.count >= 2 {
+        if agents.count >= 2, structure.maxCards >= 2 {
             return drawCards(agents, in: rect)
         }
         if let single = agents.first {
-            return drawSingle(single, others: [], today: model.today, in: rect)
+            return drawSingle(single, others: [], today: model.today, in: rect, focused: model.focused)
         }
         drawIdle(model, in: rect)
         return BarLayout()
@@ -62,20 +84,20 @@ enum BarRenderer {
 
     private static func drawActionRow(_ target: AgentSnapshot, in rect: NSRect) -> BarLayout {
         var layout = BarLayout()
-        let accent = providerTint(target.provider)
+        let accent = BarStyle.providerTint(target.provider)
         var x = BarStyle.padding
 
         let dotRect = NSRect(x: x + 3, y: rect.midY - 3, width: 6, height: 6)
-        target.phase.tint.setFill()
+        BarStyle.phaseTint(target.phase).setFill()
         NSBezierPath(ovalIn: dotRect).fill()
         x += 16
         x += text(target.project, x: x, font: BarStyle.cardFont,
-                  color: NSColor(white: 0.95, alpha: 1), maxWidth: 180) + 18
+                  color: BarStyle.primaryText, maxWidth: 180) + 18
 
         let items: [(String, BarAction, NSColor)] = [
             ("只看这个", .focus, accent),
             ("隐藏 2 小时", .hide, BarStyle.secondaryText),
-            ("归档", .archive, NSColor(srgbRed: 1.0, green: 0.45, blue: 0.42, alpha: 1)),
+            ("归档", .archive, BarStyle.tint(NSColor(srgbRed: 1.0, green: 0.45, blue: 0.42, alpha: 1))),
             ("取消", .cancel, BarStyle.faintText)
         ]
 
@@ -91,7 +113,7 @@ enum BarRenderer {
             path.stroke()
             let tw = measure(label, font: BarStyle.chipFont)
             _ = text(label, x: r.minX + (r.width - tw) / 2, font: BarStyle.chipFont,
-                     color: NSColor(white: 0.95, alpha: 1), maxWidth: r.width)
+                     color: BarStyle.primaryText, maxWidth: r.width)
             layout.actions.append((r, kind))
             x += w + 8
         }
@@ -104,7 +126,8 @@ enum BarRenderer {
 
     private static func drawCards(_ agents: [AgentSnapshot], in rect: NSRect) -> BarLayout {
         var layout = BarLayout()
-        let shown = Array(agents.prefix(4))
+        let structure = BarStyle.structure
+        let shown = Array(agents.prefix(structure.maxCards))
         let gap: CGFloat = 8
         let avail = rect.width - BarStyle.padding - BarStyle.rightPadding - gap * CGFloat(shown.count - 1)
         guard avail > 0 else { return layout }
@@ -113,7 +136,7 @@ enum BarRenderer {
         for (index, agent) in shown.enumerated() {
             let x = BarStyle.padding + (cardWidth + gap) * CGFloat(index)
             let cardRect = NSRect(x: x, y: 5, width: cardWidth, height: 20)
-            let accent = providerTint(agent.provider)
+            let accent = BarStyle.providerTint(agent.provider)
             let path = NSBezierPath(roundedRect: cardRect, xRadius: 6, yRadius: 6)
             accent.withAlphaComponent(agent.phase == .waitingApproval ? 0.24 : 0.13).setFill()
             path.fill()
@@ -123,20 +146,22 @@ enum BarRenderer {
 
             // 状态点
             let dotCenter = NSPoint(x: cardRect.minX + 11, y: cardRect.midY)
-            let dot = NSBezierPath(ovalIn: NSRect(x: dotCenter.x - 3, y: dotCenter.y - 3, width: 6, height: 6))
-            switch agent.phase {
-            case .waitingApproval:
-                NSColor.clear.setFill()
-                dot.fill()
-                agent.phase.tint.setStroke()
-                dot.lineWidth = 1.5
-                dot.stroke()
-            case .done:
-                agent.phase.tint.withAlphaComponent(0.55).setFill()
-                dot.fill()
-            default:
-                agent.phase.tint.setFill()
-                dot.fill()
+            if structure.showDot {
+                let dot = NSBezierPath(ovalIn: NSRect(x: dotCenter.x - 3, y: dotCenter.y - 3, width: 6, height: 6))
+                switch agent.phase {
+                case .waitingApproval:
+                    NSColor.clear.setFill()
+                    dot.fill()
+                    BarStyle.phaseTint(agent.phase).setStroke()
+                    dot.lineWidth = 1.5
+                    dot.stroke()
+                case .done:
+                    BarStyle.phaseTint(agent.phase).withAlphaComponent(0.55).setFill()
+                    dot.fill()
+                default:
+                    BarStyle.phaseTint(agent.phase).setFill()
+                    dot.fill()
+                }
             }
 
             // 右侧信息
@@ -145,12 +170,13 @@ enum BarRenderer {
             switch agent.phase {
             case .waitingApproval:
                 info = "待确认"
-                infoColor = agent.phase.tint
+                infoColor = BarStyle.phaseTint(agent.phase)
             case .done:
                 info = "完成"
-                infoColor = agent.phase.tint.withAlphaComponent(0.8)
+                infoColor = BarStyle.phaseTint(agent.phase).withAlphaComponent(0.8)
             default:
-                info = (agent.elapsed ?? 0) > 0 ? clockText(agent.elapsed ?? 0) : "进行中"
+                info = structure.showElapsed && (agent.elapsed ?? 0) > 0
+                    ? clockText(agent.elapsed ?? 0) : "进行中"
                 infoColor = BarStyle.faintText
             }
             let infoFont = agent.phase == .waitingApproval ? BarStyle.chipFont : BarStyle.smallMono
@@ -166,7 +192,7 @@ enum BarRenderer {
                     ? "\(providerShort(agent.provider)) · \(agent.project)"
                     : agent.project
                 _ = text(label, x: textX, font: BarStyle.cardFont,
-                         color: NSColor(white: agent.phase == .done ? 0.68 : 0.94, alpha: 1),
+                         color: BarStyle.cardText(done: agent.phase == .done),
                          maxWidth: textMax)
             }
 
@@ -178,19 +204,23 @@ enum BarRenderer {
     // MARK: - 单个 agent：左栏实时状态，右栏今日总量
 
     private static func drawSingle(_ primary: AgentSnapshot, others: [AgentSnapshot],
-                                   today: TodayStats, in rect: NSRect) -> BarLayout {
+                                   today: TodayStats, in rect: NSRect,
+                                   focused: Bool) -> BarLayout {
         var layout = BarLayout()
+        let structure = BarStyle.structure
         let rightEdge = rect.maxX - BarStyle.rightPadding
         var x = BarStyle.padding
 
         // 右侧要预留多少：今日轮次 + 可能的按钮
-        let summary = composeSummary(today, primary: primary, maxWidth: min(260, rect.width * 0.46))
+        let summary = structure.showSummary
+            ? composeSummary(today, primary: primary, maxWidth: min(260, rect.width * 0.46))
+            : nil
         let summaryW = summary.map { measure($0, font: BarStyle.smallMono) } ?? 0
         let showsButton = primary.phase == .waitingApproval || primary.phase == .done
         let buttonLabel = primary.phase == .done ? "打开会话" : "跳回会话"
         let buttonW = showsButton ? measure(buttonLabel, font: BarStyle.chipFont) + 26 : 0
 
-        let exitW: CGFloat = AgentBarConfig.focusKey != nil
+        let exitW: CGFloat = focused
             ? measure("← 全部", font: BarStyle.chipFont) + 22 : 0
 
         var reserve: CGFloat = 0
@@ -199,39 +229,44 @@ enum BarRenderer {
         if exitW > 0 { reserve += exitW + 10 }
 
         // 状态灯
-        let center = NSPoint(x: x + 5, y: rect.midY)
-        let ring = NSBezierPath(ovalIn: NSRect(x: center.x - 7, y: center.y - 7, width: 14, height: 14))
-        primary.phase.tint.withAlphaComponent(0.20).setFill()
-        ring.fill()
-        let dot = NSBezierPath(ovalIn: NSRect(x: center.x - 4, y: center.y - 4, width: 8, height: 8))
-        primary.phase.tint.setFill()
-        dot.fill()
-        x += 22
+        if structure.showDot {
+            let center = NSPoint(x: x + 5, y: rect.midY)
+            let ring = NSBezierPath(ovalIn: NSRect(x: center.x - 7, y: center.y - 7, width: 14, height: 14))
+            BarStyle.phaseTint(primary.phase).withAlphaComponent(0.20).setFill()
+            ring.fill()
+            let dot = NSBezierPath(ovalIn: NSRect(x: center.x - 4, y: center.y - 4, width: 8, height: 8))
+            BarStyle.phaseTint(primary.phase).setFill()
+            dot.fill()
+            x += 22
+        }
 
         // 状态词
         let statusText = (primary.phase == .waitingApproval && primary.note == "疑似")
             ? "可能待确认" : primary.phase.label
-        x += text(statusText, x: x, font: BarStyle.statusFont, color: primary.phase.tint) + 14
+        x += text(statusText, x: x, font: BarStyle.statusFont,
+                  color: BarStyle.phaseTint(primary.phase)) + 14
 
         // 秒表 / 本轮耗时
-        if let seconds = primary.elapsed ?? primary.turnDuration {
+        if structure.showElapsed, let seconds = primary.elapsed ?? primary.turnDuration {
             x += text(clockText(seconds), x: x, font: BarStyle.monoFont, color: BarStyle.secondaryText) + 16
         }
 
         // 尾部元素先算宽度，剩下的才是项目名的
         var chipLabel: String?
-        if let tool = primary.tool, !tool.isEmpty, primary.phase != .done {
+        if structure.showTool, let tool = primary.tool, !tool.isEmpty, primary.phase != .done {
             chipLabel = shortTool(tool)
         }
         let chipW = chipLabel.map { measure($0, font: BarStyle.chipFont) + 18 + 12 } ?? 0
         let liveOthers = others.filter { $0.isLive }
         let othersW: CGFloat = liveOthers.isEmpty ? 0 : measure("+\(liveOthers.count)", font: BarStyle.chipFont) + 12
 
-        let sepW: CGFloat = 12
-        let projectMax = max(48, rightEdge - reserve - x - sepW - chipW - othersW - 8)
-        x += text("·", x: x, font: BarStyle.bodyFont, color: BarStyle.faintText) + sepW
-        x += text(primary.project, x: x, font: BarStyle.bodyFont, color: BarStyle.primaryText,
-                  maxWidth: projectMax) + 12
+        if structure.showProject {
+            let sepW: CGFloat = 12
+            let projectMax = max(48, rightEdge - reserve - x - sepW - chipW - othersW - 8)
+            x += text("·", x: x, font: BarStyle.bodyFont, color: BarStyle.faintText) + sepW
+            x += text(primary.project, x: x, font: BarStyle.bodyFont, color: BarStyle.primaryText,
+                      maxWidth: projectMax) + 12
+        }
 
         if let label = chipLabel {
             x = chip(label, x: x) + 12
@@ -257,29 +292,31 @@ enum BarRenderer {
             }
             let r = NSRect(x: originX, y: rect.midY - 10, width: buttonW, height: 20)
             let path = NSBezierPath(roundedRect: r, xRadius: 10, yRadius: 10)
-            primary.phase.tint.withAlphaComponent(primary.phase == .done ? 0.18 : 0.24).setFill()
+            let tint = BarStyle.phaseTint(primary.phase)
+            tint.withAlphaComponent(primary.phase == .done ? 0.18 : 0.24).setFill()
             path.fill()
-            primary.phase.tint.withAlphaComponent(0.65).setStroke()
+            tint.withAlphaComponent(0.65).setStroke()
             path.lineWidth = 1
             path.stroke()
             let tw = measure(buttonLabel, font: BarStyle.chipFont)
             _ = text(buttonLabel, x: r.minX + (r.width - tw) / 2, font: BarStyle.chipFont,
-                     color: NSColor(white: 1, alpha: 0.95), maxWidth: r.width)
+                     color: BarStyle.theme.isLight ? BarStyle.primaryText : NSColor(white: 1, alpha: 0.95),
+                     maxWidth: r.width)
             layout.approvalRect = r
         }
 
         if exitW > 0 {
             let r = NSRect(x: rightEdge - exitW, y: rect.midY - 10, width: exitW, height: 20)
             let path = NSBezierPath(roundedRect: r, xRadius: 10, yRadius: 10)
-            NSColor(white: 1, alpha: 0.08).setFill()
+            BarStyle.strongFill.setFill()
             path.fill()
-            NSColor(white: 1, alpha: 0.22).setStroke()
+            BarStyle.strongStroke.setStroke()
             path.lineWidth = 1
             path.stroke()
             let label = "← 全部"
             let tw = measure(label, font: BarStyle.chipFont)
             _ = text(label, x: r.minX + (r.width - tw) / 2, font: BarStyle.chipFont,
-                     color: NSColor(white: 0.9, alpha: 1), maxWidth: r.width)
+                     color: BarStyle.primaryText, maxWidth: r.width)
             layout.exitFocusRect = r
         }
 
@@ -292,13 +329,16 @@ enum BarRenderer {
 
     private static func drawIdle(_ model: BarModel, in rect: NSRect) {
         let today = model.today
+        let structure = BarStyle.structure
         var x = BarStyle.padding
 
-        if today.isEmpty {
+        if !structure.showSummary {
+            x += text("AgentBar", x: x, font: BarStyle.bodyFont, color: BarStyle.faintText) + 12
+        } else if today.isEmpty {
             x += text("AgentBar · 暂无 AI 活动", x: x, font: BarStyle.bodyFont, color: BarStyle.faintText) + 12
         } else {
             x += text("今日", x: x, font: BarStyle.bodyFont, color: BarStyle.faintText) + 10
-            x += text("\(today.turns) 轮", x: x, font: BarStyle.statusFont, color: BarStyle.primaryText) + 14
+            x += text("\(today.turns) 轮", x: x, font: BarStyle.statusFont, color: BarStyle.accent) + 14
             x += text("·", x: x, font: BarStyle.bodyFont, color: BarStyle.faintText) + 12
             x += text(today.durationText, x: x, font: BarStyle.monoFont, color: BarStyle.primaryText) + 14
             if today.credits > 0 {
@@ -316,20 +356,25 @@ enum BarRenderer {
             }
         }
 
-        guard rect.width > 420 else { return }
+        guard structure.showPet, rect.width > 420 else { return }
 
         // 宠物贴右
         let petSize: CGFloat = 26
         let petRect = NSRect(x: rect.maxX - BarStyle.rightPadding - petSize,
                              y: rect.midY - petSize / 2,
                              width: petSize, height: petSize)
-        Pet.draw(frame: model.tick, tint: Phase.thinking.tint, in: petRect)
+        Pet.draw(frame: petFrame(), tint: BarStyle.phaseTint(.thinking), in: petRect)
 
         let caption = "待命中"
         let w = measure(caption, font: BarStyle.smallFont)
         if petRect.minX - w - 10 > x + 24 {
             _ = text(caption, x: petRect.minX - w - 10, font: BarStyle.smallFont, color: BarStyle.faintText)
         }
+    }
+
+    /// 宠物按墙钟走，不再依赖 model.tick（这样没模型变化时也能判断该不该重画）
+    static func petFrame(_ date: Date = Date()) -> Int {
+        Int(date.timeIntervalSince1970 * 4)
     }
 
     /// 按优先级拼右栏摘要，放不下的部分自动丢掉
@@ -419,22 +464,41 @@ enum BarRenderer {
         cost < 0.01 ? "<¥0.01" : String(format: "¥%.2f", cost)
     }
 
+    /// 文本宽度测量带缓存：同一屏里同一个字符串会被量两三遍
+    private static var measureCache: [String: CGFloat] = [:]
+    private static let measureLock = NSLock()
+
     static func measure(_ s: String, font: NSFont) -> CGFloat {
-        ceil(NSAttributedString(string: s, attributes: [.font: font]).size().width)
+        let key = "\(font.fontName)|\(font.pointSize)|\(s)"
+        measureLock.lock()
+        if let hit = measureCache[key] { measureLock.unlock(); return hit }
+        if measureCache.count > 512 { measureCache.removeAll(keepingCapacity: true) }
+        measureLock.unlock()
+
+        let w = ceil(NSAttributedString(string: s, attributes: [.font: font]).size().width)
+        measureLock.lock()
+        measureCache[key] = w
+        measureLock.unlock()
+        return w
+    }
+
+    static func clearCaches() {
+        measureLock.lock(); measureCache.removeAll(keepingCapacity: true); measureLock.unlock()
     }
 
     private static func chip(_ label: String, x: CGFloat) -> CGFloat {
         let w = measure(label, font: BarStyle.chipFont) + 18
         let r = NSRect(x: x, y: BarStyle.height / 2 - 9.5, width: w, height: 19)
         let path = NSBezierPath(roundedRect: r, xRadius: 5, yRadius: 5)
-        NSColor(white: 1, alpha: 0.07).setFill()
+        BarStyle.surfaceFill.setFill()
         path.fill()
-        NSColor(white: 1, alpha: 0.14).setStroke()
+        BarStyle.surfaceStroke.setStroke()
         path.lineWidth = 1
         path.stroke()
         let tw = measure(label, font: BarStyle.chipFont)
         _ = text(label, x: r.minX + (r.width - tw) / 2, font: BarStyle.chipFont,
-                 color: NSColor(white: 0.85, alpha: 1), maxWidth: r.width)
+                 color: BarStyle.theme.isLight ? BarStyle.primaryText : NSColor(white: 0.85, alpha: 1),
+                 maxWidth: r.width)
         return r.maxX
     }
 
@@ -496,3 +560,5 @@ enum Pet {
         px(bx + 3, by + 8, 1, 1, tint.withAlphaComponent(frame % 12 < 8 ? 0.95 : 0.25))
     }
 }
+
+// MARK: - 主题适配的小工具

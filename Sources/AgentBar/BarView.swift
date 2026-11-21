@@ -68,13 +68,20 @@ final class BarView: NSView {
             Log.write("实测：view bounds=\(Int(bounds.width))x\(Int(bounds.height)) | \(superDesc) | \(windowDesc)")
         }
 
+        // 每次画之前同步一遍主题与结构：面板改完立刻生效，不用重挂
+        BarStyle.theme = AgentBarConfig.theme
+        // 系统已经把面板调暗了：同一套配色换成高对比版，暗着也能读出字
+        if TouchBarBacklight.shared.isDimmed {
+            BarStyle.theme = BarStyle.theme.dimBoosted()
+        }
+        BarStyle.structure = AgentBarConfig.structure
+
         if AgentBarConfig.rulerMode || calibrating {
             BarRenderer.drawRuler(in: bounds)
             return
         }
 
-        BarStyle.background.setFill()
-        bounds.fill()
+        // 背景由渲染器统一填一次，这里不再重复铺
         let contentWidth = max(200, bounds.width - AgentBarConfig.reservedRight)
         let contentRect = NSRect(x: 0, y: 0, width: contentWidth, height: bounds.height)
         hitLayout = BarRenderer.draw(model, in: contentRect, action: actionTarget)

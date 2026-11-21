@@ -10,8 +10,14 @@ enum CLI {
       agentbar                         启动菜单栏 App 并接管 Touch Bar
       agentbar report --provider p ... 上报一条状态（任何工具都能调）
       agentbar hook                    从 stdin 读 hook JSON（Claude Code / Codex / WorkBuddy 格式）
-      agentbar render [--out 路径]      把当前界面渲染成 PNG（不需要 Touch Bar 硬件）
+      agentbar render [--out 路径] [--theme 名称]
+                                       把当前界面渲染成 PNG（不需要 Touch Bar 硬件）
+      agentbar panel [--out 路径]       把菜单栏控制面板离屏渲染成 PNG
       agentbar dump                    以 JSON 打印当前识别到的所有 agent
+      agentbar bench [--iters N] [--today]
+                                       性能基准：量一次刷新花多少毫秒
+      agentbar selftest [--real]        状态机自检（合成夹具，--real 再跑真实日志）
+      agentbar backlight               只读诊断 Touch Bar 背光（常亮功能靠它）
       agentbar clean                   清掉 ~/.agentbar/state 里的上报文件
 
     report 参数：
@@ -141,8 +147,10 @@ enum CLI {
             "session": s.sessionId,
             "project": s.project,
             "phase": s.phase.rawValue,
+            "group": s.displayGroup,
             "updatedAt": s.updatedAt
         ]
+        if let start = s.turnStartedAt { d["start"] = start }
         if let tool = s.tool { d["tool"] = tool }
         if let tokens = s.tokens { d["tokens"] = tokens }
         if let cost = s.costCNY { d["cost"] = (cost * 100).rounded() / 100 }
@@ -179,6 +187,22 @@ enum CLI {
 
         let out = kv["out"] ?? (NSHomeDirectory() + "/Desktop/agentbar-preview.png")
         let width = CGFloat(Double(kv["width"] ?? "") ?? 1000)
+
+        // 预览图可以指定主题（只影响这次渲染，不写配置）
+        if let id = kv["theme"] {
+            if id == "custom" {
+                BarStyle.theme = Themes.custom(backgroundHex: kv["background"], accentHex: kv["accent"])
+            } else {
+                BarStyle.theme = Themes.preset(id) ?? Themes.midnight
+            }
+        } else {
+            BarStyle.theme = AgentBarConfig.theme
+        }
+        if let cards = kv["maxCards"].flatMap({ Int($0) }) {
+            var s = AgentBarConfig.structure
+            s.maxCards = cards
+            BarStyle.structure = s
+        }
 
         var model: BarModel
         if kv["multi"] != nil {
@@ -260,6 +284,24 @@ enum CLI {
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
                                                  withIntermediateDirectories: true)
         try? data.write(to: url)
+    }
+}
+
+extension CLI {
+    /// 只读诊断：把 Touch Bar 背光的几个关键值打出来，不改任何设置
+    static func backlight(_ args: [String]) {
+        print("Touch Bar 背光诊断（只读）")
+        for (key, value) in TouchBarBacklight.shared.diagnose() {
+            let name = key.padding(toLength: 14, withPad: " ", startingAt: 0)
+            print("  \(name)\(value)")
+        }
+        print("")
+        print("dimmingStep 0 = 原亮度，大于 0 表示系统已经把它调暗了；")
+        print("displayID = -1 表示系统没给句柄 —— 在沙箱里跑经常是这样，正常 App 里才有。")
+        if args.contains("--try") {
+            print("")
+            print("实测一次 dimToStep(0)：\(TouchBarBacklight.shared.tryUndim())")
+        }
     }
 }
 

@@ -16,12 +16,12 @@ final class TouchBarHost: NSObject, NSTouchBarDelegate {
     let view = BarView(frame: NSRect(x: 0, y: 0, width: 1000, height: BarStyle.height))
 
     private(set) var isAttached = false
-    private var lastAttach = Date.distantPast
     private var reportedMissing = false
     private var didLogAttach = false
 
     private var started = false
     private var cachedItem: NSCustomTouchBarItem?
+    private var watchdog: Timer?
 
     func start() {
         guard !started else { return }
@@ -37,36 +37,42 @@ final class TouchBarHost: NSObject, NSTouchBarDelegate {
 
         // 自检：present 返回成功不代表真的画上去了，3 秒后验证一次
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
-            guard let self else { return }
+            guard let self, AgentBarConfig.enabled else { return }
             if self.view.hasDrawn {
                 Log.write("自检通过：视图已绘制")
             } else {
                 Log.write("自检失败：present 成功但视图未绘制，重试")
-                _ = self.present()
+                _ = self.present(force: true)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                     Log.write(self.view.hasDrawn ? "重试成功" : "重试仍失败，仅菜单栏可用")
                 }
             }
         }
 
-        // 自检：present 返回成功不代表真的画上去了，3 秒后验证一次
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
-            guard let self else { return }
-            if self.view.hasDrawn {
-                Log.write("自检通过：视图已绘制")
-            } else {
-                Log.write("自检失败：present 成功但视图未绘制，重试")
-                _ = self.present()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                    Log.write(self.view.hasDrawn ? "重试成功" : "重试仍失败，仅菜单栏可用")
-                }
-            }
+        // 系统在某些转场里会收回 modal bar。
+        // 这里只是「看一眼还在不在」，真在的时候一次私有调用都不发，
+        // 免得每 4 秒把 Touch Bar 重挂一遍（会闪、也费 CPU）。
+        watchdog = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { [weak self] _ in
+            self?.verifyAttached()
         }
+        if let watchdog { RunLoop.main.add(watchdog, forMode: .common) }
+    }
 
-        // 系统在某些转场里会收回 modal bar，定时幂等重挂
-        Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { [weak self] _ in
-            self?.present()
+    func stop() {
+        watchdog?.invalidate()
+        watchdog = nil
+        dismiss()
+    }
+
+    /// 只在「确实没挂上」时才重新 present
+    @discardableResult
+    func verifyAttached() -> Bool {
+        guard AgentBarConfig.enabled else { return false }
+        guard isAttached, view.hasDrawn, view.window != nil else {
+            if isAttached { Log.write("Touch Bar 掉线，重新挂载") }
+            return present(force: true)
         }
+        return true
     }
 
     // MARK: - 私有符号
@@ -89,7 +95,10 @@ final class TouchBarHost: NSObject, NSTouchBarDelegate {
     }
 
     @discardableResult
-    func present() -> Bool {
+    func present(force: Bool = false) -> Bool {
+        guard AgentBarConfig.enabled else { return false }
+        if !force, isAttached, view.window != nil, view.hasDrawn { return true }
+
         guard let bar = touchBar, let cls = NSClassFromString("NSTouchBar") else { return false }
         let sel = NSSelectorFromString("presentSystemModalTouchBar:placement:systemTrayItemIdentifier:")
         guard let method = class_getClassMethod(cls, sel) else {
@@ -109,7 +118,6 @@ final class TouchBarHost: NSObject, NSTouchBarDelegate {
         fn(receiver, sel, bar, 0, nil)
 
         isAttached = true
-        lastAttach = Date()
         if !didLogAttach {
             didLogAttach = true
             Log.write("Touch Bar 已接管（modal placement=0）")
@@ -158,14 +166,14 @@ final class TouchBarHost: NSObject, NSTouchBarDelegate {
                      NSWorkspace.screensDidWakeNotification,
                      NSWorkspace.sessionDidBecomeActiveNotification] {
             nc.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                self?.present()
+                self?.verifyAttached()
             }
         }
         DistributedNotificationCenter.default().addObserver(
             forName: NSNotification.Name("com.apple.screenIsUnlocked"),
             object: nil, queue: .main
         ) { [weak self] _ in
-            self?.present()
+            self?.verifyAttached()
         }
     }
 }

@@ -11,30 +11,67 @@ final class CopilotAdapter {
     /// 进程内计时，避开不同时钟源
     private var turnClock: [String: (key: Int64, at: TimeInterval)] = [:]
 
+    /// 每个会话的增量状态（只解析追加的行）
+    private struct Session {
+        var stamp: FileStamp
+        var state: Parsed
+        var follower: TailFollower
+    }
+    private var sessions: [String: Session] = [:]
+
     func scan(now: Date = Date()) -> [AgentSnapshot] {
         guard FileManager.default.fileExists(atPath: root.path) else { return [] }
         let maxAge: TimeInterval = AgentBarConfig.ignoreAge ? 1e9 : 2 * 3600
         var out: [AgentSnapshot] = []
-        for dir in FileUtil.subdirs(in: root) {
+        var alive = Set<String>()
+
+        for dir in DirLister.shared.subdirs(in: root) {
             let file = dir.appendingPathComponent("events.jsonl")
             guard FileManager.default.fileExists(atPath: file.path) else { continue }
-            let age = now.timeIntervalSince(FileUtil.mtime(file))
+            let stamp = FileStamp.read(file)
+            let age = now.timeIntervalSince(stamp.mtime > 0 ? Date(timeIntervalSince1970: stamp.mtime) : .distantPast)
             if age > maxAge { continue }
-            if let snap = parse(file: file, sessionId: dir.lastPathComponent, age: age) {
+
+            let sid = dir.lastPathComponent
+            alive.insert(sid)
+
+            var session = sessions[sid]
+            if session == nil || stamp.size < (session?.stamp.size ?? 0) {
+                let follower = TailFollower()
+                follower.reset(to: stamp.size)
+                session = Session(stamp: stamp, state: Parsed.parsing(JSONLTail.objects(file)), follower: follower)
+            } else if let old = session, stamp.size != old.stamp.size {
+                let (lines, truncated) = old.follower.read(url: file, size: stamp.size)
+                if truncated {
+                    let follower = TailFollower()
+                    follower.reset(to: stamp.size)
+                    session = Session(stamp: stamp, state: Parsed.parsing(JSONLTail.objects(file)), follower: follower)
+                } else {
+                    var state = old.state
+                    for line in lines {
+                        if let obj = JSONLTail.parseLine(line) { state.ingest(obj) }
+                    }
+                    session = Session(stamp: stamp, state: state, follower: old.follower)
+                }
+            }
+            guard let current = session else { continue }
+            sessions[sid] = current
+            if let snap = snapshot(from: current.state, sessionId: sid, age: age) {
                 out.append(snap)
             }
         }
+
+        if sessions.count > alive.count { sessions = sessions.filter { alive.contains($0.key) } }
         return out
     }
 
     func debugParse(_ file: URL) -> AgentSnapshot? {
-        parse(file: file, sessionId: file.deletingLastPathComponent().lastPathComponent, age: 0, force: true)
+        let state = Parsed.parsing(JSONLTail.objects(file))
+        return snapshot(from: state, sessionId: file.deletingLastPathComponent().lastPathComponent, age: 0, force: true)
     }
 
-    func parse(file: URL, sessionId: String, age: TimeInterval, force: Bool = false) -> AgentSnapshot? {
-        let objs = JSONLTail.objects(file)
-        guard !objs.isEmpty else { return nil }
-
+    /// 事件流折叠出来的会话状态
+    private struct Parsed {
         var lastType = ""
         var lastMs: Double = 0
         var userMs: Double?
@@ -42,7 +79,17 @@ final class CopilotAdapter {
         var cwd: String?
         var tool: String?
 
-        for obj in objs {
+        static func parsing(_ objs: [[String: Any]]) -> Parsed {
+            var p = Parsed()
+            p.merge(objs)
+            return p
+        }
+
+        mutating func merge(_ objs: [[String: Any]]) {
+            for obj in objs { ingest(obj) }
+        }
+
+        mutating func ingest(_ obj: [String: Any]) {
             let type = (obj["type"] as? String) ?? ""
             let data = obj["data"] as? [String: Any]
             let ms = (obj["timestamp"] as? String).flatMap { ISODate.ms($0) } ?? 0
@@ -73,9 +120,16 @@ final class CopilotAdapter {
                 break
             }
         }
+    }
 
+    func parse(file: URL, sessionId: String, age: TimeInterval, force: Bool = false) -> AgentSnapshot? {
+        snapshot(from: Parsed.parsing(JSONLTail.objects(file)), sessionId: sessionId, age: age, force: force)
+    }
+
+    private func snapshot(from state: Parsed, sessionId: String, age: TimeInterval,
+                          force: Bool = false) -> AgentSnapshot? {
         var phase: Phase
-        switch lastType {
+        switch state.lastType {
         case "assistant.turn_end", "session.shutdown":
             phase = age < 60 ? .done : .idle
         case "session.error", "abort":
@@ -83,11 +137,11 @@ final class CopilotAdapter {
         case "session.start":
             phase = age < 60 ? .thinking : .idle
         default:
-            phase = tool != nil ? .tool : .thinking
+            phase = state.tool != nil ? .tool : .thinking
         }
         if phase == .idle, !force { return nil }
 
-        let turnKey = Int64(turnStartMs ?? userMs ?? 0)
+        let turnKey = Int64(state.turnStartMs ?? state.userMs ?? 0)
         var startedAt: Int64?
         if phase != .done {
             if let cached = turnClock[sessionId], cached.key == turnKey {
@@ -101,20 +155,20 @@ final class CopilotAdapter {
         }
 
         var durationMs: Int64?
-        if phase == .done, let u = userMs, let t = turnStartMs, t >= u {
+        if phase == .done, let u = state.userMs, let t = state.turnStartMs, t >= u {
             durationMs = Int64(t - u)
         }
 
         return AgentSnapshot(
             provider: "copilot-cli",
             sessionId: sessionId,
-            project: cwd.map { ($0 as NSString).lastPathComponent } ?? "copilot",
-            cwd: cwd,
+            project: state.cwd.map { ($0 as NSString).lastPathComponent } ?? "copilot",
+            cwd: state.cwd,
             phase: phase,
-            tool: tool,
+            tool: state.tool,
             note: nil,
             turnStartedAt: startedAt,
-            updatedAt: Int64(lastMs > 0 ? lastMs : Date().timeIntervalSince1970 * 1000),
+            updatedAt: Int64(state.lastMs > 0 ? state.lastMs : Date().timeIntervalSince1970 * 1000),
             jumpUrl: nil,
             durationMs: durationMs
         )
@@ -136,15 +190,33 @@ final class DSHAdapter {
     /// 记录每轮第一次被看到的时间，用来算耗时（缓存文件本身不含时间戳）
     private var turnStartCache: [String: (seq: Int, at: Double)] = [:]
 
+    /// 整份 JSON 快照缓存：文件没变就不再读
+    private var snapshots: [String: (stamp: FileStamp, snap: AgentSnapshot?)] = [:]
+    /// 今日用量缓存
+    private var usageCache: [String: (stamp: FileStamp, tokens: Int, cost: Double)] = [:]
+
     func scan(now: Date = Date()) -> [AgentSnapshot] {
         guard FileManager.default.fileExists(atPath: cacheDir.path) else { return [] }
         let maxAge: TimeInterval = AgentBarConfig.ignoreAge ? 1e9 : 3 * 3600
         var out: [AgentSnapshot] = []
-        for file in FileUtil.files(in: cacheDir, matching: "json") {
-            let age = now.timeIntervalSince(FileUtil.mtime(file))
+        var alive = Set<String>()
+
+        for item in DirLister.shared.files(in: cacheDir, ext: "json") {
+            let age = now.timeIntervalSince(Date(timeIntervalSince1970: item.stamp.mtime))
             if age > maxAge { continue }
-            if let snap = parse(file: file, now: now) { out.append(snap) }
+            let path = item.url.path
+            alive.insert(path)
+
+            if let cached = snapshots[path], cached.stamp == item.stamp {
+                if let snap = cached.snap { out.append(snap) }
+                continue
+            }
+            let snap = parse(file: item.url, now: now)
+            snapshots[path] = (item.stamp, snap)
+            if let snap { out.append(snap) }
         }
+
+        if snapshots.count > alive.count { snapshots = snapshots.filter { alive.contains($0.key) } }
         return out
     }
 
@@ -158,28 +230,47 @@ final class DSHAdapter {
         var tokens = 0
         var cost = 0.0
         let cal = Calendar.current
-        for file in FileUtil.files(in: cacheDir, matching: "json") {
-            guard cal.isDateInToday(FileUtil.mtime(file)) else { continue }
-            guard let data = try? Data(contentsOf: file),
-                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let record = root["record"] as? [String: Any],
-                  let rows = record["rows"] as? [String: Any] else { continue }
+        var alive = Set<String>()
 
-            let usage = (rows["tokenUsage"] as? [String: Any])?["val"] as? [String: Any]
-            let totals = usage?["totals"] as? [String: Any]
-            let cacheRead = (totals?["cacheReadTokens"] as? NSNumber)?.intValue ?? 0
-            let uncached = (totals?["uncachedInputTokens"] as? NSNumber)?.intValue ?? 0
-            let output = (totals?["outputTokens"] as? NSNumber)?.intValue ?? 0
-            guard cacheRead + uncached + output > 0 else { continue }
-
-            let model = ((rows["modelSelection"] as? [String: Any])?["val"] as? [String: Any])
-                .flatMap { ($0["lastUsed"] as? [String: Any])?["model"] as? String } ?? "deepseek-flash"
-
-            tokens += cacheRead + uncached + output
-            cost += Pricing.cost(cacheReadTokens: cacheRead, uncachedInputTokens: uncached,
-                                 outputTokens: output, model: model, at: FileUtil.mtime(file))
+        for item in DirLister.shared.files(in: cacheDir, ext: "json", ttl: 10, verify: false) {
+            guard cal.isDateInToday(Date(timeIntervalSince1970: item.stamp.mtime)) else { continue }
+            let path = item.url.path
+            alive.insert(path)
+            let entry: (tokens: Int, cost: Double)
+            if let cached = usageCache[path], cached.stamp == item.stamp {
+                entry = (cached.tokens, cached.cost)
+            } else {
+                entry = Self.usage(file: item.url, stamp: item.stamp)
+                usageCache[path] = (item.stamp, entry.tokens, entry.cost)
+            }
+            tokens += entry.tokens
+            cost += entry.cost
         }
+
+        if usageCache.count > alive.count { usageCache = usageCache.filter { alive.contains($0.key) } }
         return (tokens, cost)
+    }
+
+    private static func usage(file: URL, stamp: FileStamp) -> (Int, Double) {
+        guard let data = try? Data(contentsOf: file),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let record = root["record"] as? [String: Any],
+              let rows = record["rows"] as? [String: Any] else { return (0, 0) }
+
+        let usage = (rows["tokenUsage"] as? [String: Any])?["val"] as? [String: Any]
+        let totals = usage?["totals"] as? [String: Any]
+        let cacheRead = (totals?["cacheReadTokens"] as? NSNumber)?.intValue ?? 0
+        let uncached = (totals?["uncachedInputTokens"] as? NSNumber)?.intValue ?? 0
+        let output = (totals?["outputTokens"] as? NSNumber)?.intValue ?? 0
+        guard cacheRead + uncached + output > 0 else { return (0, 0) }
+
+        let model = ((rows["modelSelection"] as? [String: Any])?["val"] as? [String: Any])
+            .flatMap { ($0["lastUsed"] as? [String: Any])?["model"] as? String } ?? "deepseek-flash"
+
+        let cost = Pricing.cost(cacheReadTokens: cacheRead, uncachedInputTokens: uncached,
+                                outputTokens: output, model: model,
+                                at: Date(timeIntervalSince1970: stamp.mtime))
+        return (cacheRead + uncached + output, cost)
     }
 
     func parse(file: URL, now: Date, force: Bool = false) -> AgentSnapshot? {
@@ -197,10 +288,6 @@ final class DSHAdapter {
         let openSeq = (boundary?["openTurnStartSeq"] as? NSNumber)?.intValue
         let stepBoundary = boundary?["lastStepBoundary"] as? [String: Any]
         let stepKind = stepBoundary?["kind"] as? String
-
-        let approval = (rows["approvalState"] as? [String: Any])?["val"] as? [String: Any]
-        let turnOpen = (approval?["turnOpen"] as? Bool) ?? false
-        let policy = approval?["policy"] as? String
 
         // 注意：approvalState.turnOpen 表示「本轮是否允许弹审批」，不是「正在等你」，
         // 用它判待确认会一直误报。dsh 目前只区分 执行 / 思考 / 空。

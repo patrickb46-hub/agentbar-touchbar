@@ -11,6 +11,14 @@
 
 ---
 
+## 宣传片 / Promo
+
+[![AgentBar 宣传片](docs/promo-cover.png)](docs/promo.mp4)
+
+26 秒，无旁白只有配乐：多进程卡片 → 待确认 → 一点跳回 → 控制面板。
+
+---
+
 ## 这是什么 / What it is
 
 AgentBar 占用你 MacBook 的 Touch Bar，把「哪个 AI 正在干活、干到哪一步、要不要你点头」摊在键盘上方。
